@@ -1,4 +1,5 @@
-$ kubectl logs -f -n scoville scoville-7769856d59-vgtns
+$ kubectl -n scoville logs -f deployment/scoville
+Found 2 pods, using pod/scoville-7769856d59-vgtns
 time=2026-04-18T20:08:07.077Z level=INFO msg="southbound: host mode (pull via /flows)"
 time=2026-04-18T20:08:07.077Z level=INFO msg="bmp collector configured" nats_url=nats://nats.jalapeno.svc.cluster.local:4222 topo_id=underlay
 time=2026-04-18T20:08:07.077Z level=INFO msg="scoville starting" addr=:8080 bmp=true encap_mode=host
@@ -7,3 +8,26 @@ time=2026-04-18T20:08:10.081Z level=WARN msg="bmp subscribe failed, retrying" er
 time=2026-04-18T20:08:16.086Z level=WARN msg="bmp subscribe failed, retrying" err="subscribe gobmp.parsed.ls_link: nats: no stream matches subject" delay=12s
 time=2026-04-18T20:08:28.088Z level=WARN msg="bmp subscribe failed, retrying" err="subscribe gobmp.parsed.ls_node: nats: no stream matches subject" delay=24s
 time=2026-04-18T20:08:52.089Z level=WARN msg="bmp subscribe failed, retrying" err="subscribe gobmp.parsed.ls_node: nats: no stream matches subject" delay=48s
+time=2026-04-18T20:09:40.092Z level=WARN msg="bmp subscribe failed, retrying" err="subscribe gobmp.parsed.ls_srv6_sid: nats: no stream matches subject" delay=48s
+time=2026-04-18T20:10:28.094Z level=WARN msg="bmp subscribe failed, retrying" err="subscribe gobmp.parsed.peer: nats: no stream matches subject" delay=48s
+time=2026-04-18T20:11:16.096Z level=WARN msg="bmp subscribe failed, retrying" err="subscribe gobmp.parsed.ls_link: nats: no stream matches subject" delay=48s
+time=2026-04-18T20:12:04.098Z level=WARN msg="bmp subscribe failed, retrying" err="subscribe gobmp.parsed.ls_node: nats: no stream matches subject" delay=48s
+time=2026-04-18T20:12:52.099Z level=WARN msg="bmp subscribe failed, retrying" err="subscribe gobmp.parsed.ls_node: nats: no stream matches subject" delay=48s
+time=2026-04-18T20:13:40.102Z level=WARN msg="bmp subscribe failed, retrying" err="subscribe gobmp.parsed.ls_node: nats: no stream matches subject" delay=48s
+time=2026-04-18T20:14:28.103Z level=WARN msg="bmp subscribe failed, retrying" err="subscribe gobmp.parsed.ls_node: nats: no stream matches subject" delay=48s
+time=2026-04-18T20:14:57.863Z level=WARN msg="nats disconnected" err=<nil>
+
+^C
+cisco@jalapeno-host:~/scoville$ kubectl logs -f -n jalapeno deployment/gobmp | more
+I0418 18:17:54.114777       1 kafka-publisher.go:159] Initializing Kafka producer client
+I0418 18:17:54.120585       1 kafka-publisher.go:189] Connected to controller broker: broker.jalapeno:9092 id: 0
+I0418 18:17:54.133491       1 kafka-publisher.go:203] Initialized Kafka Async producer
+I0418 18:17:54.133565       1 gobmp.go:100] Kafka publisher has been successfully initialized.
+I0418 18:17:54.133685       1 gobmpsrv.go:35] Starting gobmp server on [::]:5000, intercept mode: false
+I0418 18:17:54.547412       1 gobmpsrv.go:54] client 10.0.0.160:19564 accepted, calling bmpWorker
+I0418 18:17:54.829867       1 gobmpsrv.go:54] client 10.0.0.160:23360 accepted, calling bmpWorker
+I0418 18:17:54.910139       1 gobmpsrv.go:54] client 10.0.0.160:53100 accepted, calling bmpWorker
+I0418 18:17:55.362612       1 gobmpsrv.go:54] client 10.0.0.160:35320 accepted, calling bmpWorker
+I0418 18:17:55.391856       1 gobmpsrv.go:54] client 10.0.0.160:30800 accepted, calling bmpWorker
+I0418 18:17:55.849542       1 gobmpsrv.go:54] client 10.0.0.160:38176 accepted, calling bmpWorker
+I0418 18:17:58.213283       1 gobmpsrv.go:54] client 10.0.0.160:46820 accepted, calling bmpWorker
