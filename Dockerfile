@@ -5,9 +5,6 @@ WORKDIR /src
 
 # Cache module downloads separately from source so rebuilds are fast.
 COPY go.mod go.sum ./
-# If the gobmp replace directive points to a sibling directory, copy it too.
-# Adjust the path below if your layout differs.
-COPY ../gobmp/ /gobmp/
 RUN go mod download
 
 COPY . .
