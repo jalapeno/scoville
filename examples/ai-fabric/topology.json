@@ -1,0 +1,419 @@
+{
+  "topology_id": "ai-fabric",
+  "description": "2-tier BGP-only AI fabric — 2 spines, 2 leaves, 2 GPU hosts. SRv6 uSID F3216.",
+  "source": "push",
+
+  "nodes": [
+    {
+      "id": "spine-1",
+      "subtype": "switch",
+      "name": "Spine Switch 1",
+      "asn": 65001,
+      "protocol": "BGP",
+      "labels": {
+        "tier": "spine",
+        "rack": "spine-row"
+      },
+      "annotations": {
+        "management_ip": "192.168.100.1:57400"
+      },
+      "srv6_locators": [
+        {
+          "prefix": "fc00:0:1::/48",
+          "algo_id": 0,
+          "node_sid": {
+            "sid": "fc00:0:1::",
+            "behavior": "End",
+            "structure": {
+              "locator_block_len": 32,
+              "locator_node_len": 16,
+              "function_len":     16,
+              "argument_len":     0
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "spine-2",
+      "subtype": "switch",
+      "name": "Spine Switch 2",
+      "asn": 65002,
+      "protocol": "BGP",
+      "labels": {
+        "tier": "spine",
+        "rack": "spine-row"
+      },
+      "annotations": {
+        "management_ip": "192.168.100.2:57400"
+      },
+      "srv6_locators": [
+        {
+          "prefix": "fc00:0:2::/48",
+          "algo_id": 0,
+          "node_sid": {
+            "sid": "fc00:0:2::",
+            "behavior": "End",
+            "structure": {
+              "locator_block_len": 32,
+              "locator_node_len": 16,
+              "function_len":     16,
+              "argument_len":     0
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "leaf-1",
+      "subtype": "switch",
+      "name": "Leaf Switch 1",
+      "asn": 65101,
+      "protocol": "BGP",
+      "labels": {
+        "tier": "leaf",
+        "rack": "rack-A"
+      },
+      "annotations": {
+        "management_ip": "192.168.100.3:57400"
+      },
+      "srv6_locators": [
+        {
+          "prefix": "fc00:0:3::/48",
+          "algo_id": 0,
+          "node_sid": {
+            "sid": "fc00:0:3::",
+            "behavior": "End",
+            "structure": {
+              "locator_block_len": 32,
+              "locator_node_len": 16,
+              "function_len":     16,
+              "argument_len":     0
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "leaf-2",
+      "subtype": "switch",
+      "name": "Leaf Switch 2",
+      "asn": 65102,
+      "protocol": "BGP",
+      "labels": {
+        "tier": "leaf",
+        "rack": "rack-B"
+      },
+      "annotations": {
+        "management_ip": "192.168.100.4:57400"
+      },
+      "srv6_locators": [
+        {
+          "prefix": "fc00:0:4::/48",
+          "algo_id": 0,
+          "node_sid": {
+            "sid": "fc00:0:4::",
+            "behavior": "End",
+            "structure": {
+              "locator_block_len": 32,
+              "locator_node_len": 16,
+              "function_len":     16,
+              "argument_len":     0
+            }
+          }
+        }
+      ]
+    }
+  ],
+
+  "interfaces": [
+    {
+      "id": "spine-1-eth0",
+      "owner_node_id": "spine-1",
+      "name": "Ethernet0",
+      "bandwidth_bps": 400000000000,
+      "addresses": ["fc00:0:1:0:1::1/127"],
+      "srv6_ua_sids": [
+        {
+          "sid": "fc00:0:1:e001::",
+          "behavior": "End.X",
+          "structure": {
+            "locator_block_len": 32,
+            "locator_node_len": 16,
+            "function_len":     16,
+            "argument_len":     0
+          }
+        }
+      ]
+    },
+    {
+      "id": "spine-1-eth1",
+      "owner_node_id": "spine-1",
+      "name": "Ethernet1",
+      "bandwidth_bps": 400000000000,
+      "addresses": ["fc00:0:1:0:2::1/127"],
+      "srv6_ua_sids": [
+        {
+          "sid": "fc00:0:1:e002::",
+          "behavior": "End.X",
+          "structure": {
+            "locator_block_len": 32,
+            "locator_node_len": 16,
+            "function_len":     16,
+            "argument_len":     0
+          }
+        }
+      ]
+    },
+    {
+      "id": "spine-2-eth0",
+      "owner_node_id": "spine-2",
+      "name": "Ethernet0",
+      "bandwidth_bps": 400000000000,
+      "addresses": ["fc00:0:2:0:1::1/127"],
+      "srv6_ua_sids": [
+        {
+          "sid": "fc00:0:2:e001::",
+          "behavior": "End.X",
+          "structure": {
+            "locator_block_len": 32,
+            "locator_node_len": 16,
+            "function_len":     16,
+            "argument_len":     0
+          }
+        }
+      ]
+    },
+    {
+      "id": "spine-2-eth1",
+      "owner_node_id": "spine-2",
+      "name": "Ethernet1",
+      "bandwidth_bps": 400000000000,
+      "addresses": ["fc00:0:2:0:2::1/127"],
+      "srv6_ua_sids": [
+        {
+          "sid": "fc00:0:2:e002::",
+          "behavior": "End.X",
+          "structure": {
+            "locator_block_len": 32,
+            "locator_node_len": 16,
+            "function_len":     16,
+            "argument_len":     0
+          }
+        }
+      ]
+    },
+    {
+      "id": "leaf-1-eth0",
+      "owner_node_id": "leaf-1",
+      "name": "Ethernet0",
+      "bandwidth_bps": 400000000000,
+      "addresses": ["fc00:0:1:0:1::0/127"],
+      "srv6_ua_sids": [
+        {
+          "sid": "fc00:0:3:e001::",
+          "behavior": "End.X",
+          "structure": {
+            "locator_block_len": 32,
+            "locator_node_len": 16,
+            "function_len":     16,
+            "argument_len":     0
+          }
+        }
+      ]
+    },
+    {
+      "id": "leaf-1-eth1",
+      "owner_node_id": "leaf-1",
+      "name": "Ethernet1",
+      "bandwidth_bps": 400000000000,
+      "addresses": ["fc00:0:2:0:1::0/127"],
+      "srv6_ua_sids": [
+        {
+          "sid": "fc00:0:3:e002::",
+          "behavior": "End.X",
+          "structure": {
+            "locator_block_len": 32,
+            "locator_node_len": 16,
+            "function_len":     16,
+            "argument_len":     0
+          }
+        }
+      ]
+    },
+    {
+      "id": "leaf-2-eth0",
+      "owner_node_id": "leaf-2",
+      "name": "Ethernet0",
+      "bandwidth_bps": 400000000000,
+      "addresses": ["fc00:0:1:0:2::0/127"],
+      "srv6_ua_sids": [
+        {
+          "sid": "fc00:0:4:e001::",
+          "behavior": "End.X",
+          "structure": {
+            "locator_block_len": 32,
+            "locator_node_len": 16,
+            "function_len":     16,
+            "argument_len":     0
+          }
+        }
+      ]
+    },
+    {
+      "id": "leaf-2-eth1",
+      "owner_node_id": "leaf-2",
+      "name": "Ethernet1",
+      "bandwidth_bps": 400000000000,
+      "addresses": ["fc00:0:2:0:2::0/127"],
+      "srv6_ua_sids": [
+        {
+          "sid": "fc00:0:4:e002::",
+          "behavior": "End.X",
+          "structure": {
+            "locator_block_len": 32,
+            "locator_node_len": 16,
+            "function_len":     16,
+            "argument_len":     0
+          }
+        }
+      ]
+    }
+  ],
+
+  "endpoints": [
+    {
+      "id": "gpu-0",
+      "subtype": "gpu",
+      "name": "H100 GPU 0",
+      "addresses": ["10.0.1.1"],
+      "labels": {
+        "rack": "rack-A",
+        "job": "train-llm"
+      }
+    },
+    {
+      "id": "gpu-1",
+      "subtype": "gpu",
+      "name": "H100 GPU 1",
+      "addresses": ["10.0.2.1"],
+      "labels": {
+        "rack": "rack-B",
+        "job": "train-llm"
+      }
+    }
+  ],
+
+  "edges": [
+    {
+      "id": "link-leaf1-to-spine1",
+      "type": "physical",
+      "src_id": "leaf-1",
+      "dst_id": "spine-1",
+      "directed": true,
+      "local_iface_id": "leaf-1-eth0",
+      "remote_iface_id": "spine-1-eth0",
+      "igp_metric": 10,
+      "max_bw_bps": 400000000000,
+      "unidir_delay_us": 2
+    },
+    {
+      "id": "link-spine1-to-leaf1",
+      "type": "physical",
+      "src_id": "spine-1",
+      "dst_id": "leaf-1",
+      "directed": true,
+      "local_iface_id": "spine-1-eth0",
+      "remote_iface_id": "leaf-1-eth0",
+      "igp_metric": 10,
+      "max_bw_bps": 400000000000,
+      "unidir_delay_us": 2
+    },
+    {
+      "id": "link-leaf1-to-spine2",
+      "type": "physical",
+      "src_id": "leaf-1",
+      "dst_id": "spine-2",
+      "directed": true,
+      "local_iface_id": "leaf-1-eth1",
+      "remote_iface_id": "spine-2-eth0",
+      "igp_metric": 10,
+      "max_bw_bps": 400000000000,
+      "unidir_delay_us": 2
+    },
+    {
+      "id": "link-spine2-to-leaf1",
+      "type": "physical",
+      "src_id": "spine-2",
+      "dst_id": "leaf-1",
+      "directed": true,
+      "local_iface_id": "spine-2-eth0",
+      "remote_iface_id": "leaf-1-eth1",
+      "igp_metric": 10,
+      "max_bw_bps": 400000000000,
+      "unidir_delay_us": 2
+    },
+    {
+      "id": "link-leaf2-to-spine1",
+      "type": "physical",
+      "src_id": "leaf-2",
+      "dst_id": "spine-1",
+      "directed": true,
+      "local_iface_id": "leaf-2-eth0",
+      "remote_iface_id": "spine-1-eth1",
+      "igp_metric": 10,
+      "max_bw_bps": 400000000000,
+      "unidir_delay_us": 2
+    },
+    {
+      "id": "link-spine1-to-leaf2",
+      "type": "physical",
+      "src_id": "spine-1",
+      "dst_id": "leaf-2",
+      "directed": true,
+      "local_iface_id": "spine-1-eth1",
+      "remote_iface_id": "leaf-2-eth0",
+      "igp_metric": 10,
+      "max_bw_bps": 400000000000,
+      "unidir_delay_us": 2
+    },
+    {
+      "id": "link-leaf2-to-spine2",
+      "type": "physical",
+      "src_id": "leaf-2",
+      "dst_id": "spine-2",
+      "directed": true,
+      "local_iface_id": "leaf-2-eth1",
+      "remote_iface_id": "spine-2-eth1",
+      "igp_metric": 10,
+      "max_bw_bps": 400000000000,
+      "unidir_delay_us": 2
+    },
+    {
+      "id": "link-spine2-to-leaf2",
+      "type": "physical",
+      "src_id": "spine-2",
+      "dst_id": "leaf-2",
+      "directed": true,
+      "local_iface_id": "spine-2-eth1",
+      "remote_iface_id": "leaf-2-eth1",
+      "igp_metric": 10,
+      "max_bw_bps": 400000000000,
+      "unidir_delay_us": 2
+    },
+    {
+      "id": "att-gpu0-leaf1",
+      "type": "attachment",
+      "src_id": "gpu-0",
+      "dst_id": "leaf-1",
+      "directed": true
+    },
+    {
+      "id": "att-gpu1-leaf2",
+      "type": "attachment",
+      "src_id": "gpu-1",
+      "dst_id": "leaf-2",
+      "directed": true
+    }
+  ]
+}

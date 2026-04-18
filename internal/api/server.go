@@ -1,0 +1,119 @@
+// Package api implements the scoville HTTP API server.
+//
+// Endpoints:
+//
+//	POST   /topology               — upload/replace a topology (push-via-JSON)
+//	GET    /topology               — list topology IDs
+//	GET    /topology/{id}          — describe a topology (stats)
+//	DELETE /topology/{id}          — remove a topology
+//
+//	POST   /paths/request                  — request SRv6 paths for a workload
+//	GET    /paths/{workload_id}            — get workload allocation status
+//	GET    /paths/{workload_id}/flows      — SRv6 segment lists for pull model
+//	GET    /paths/{workload_id}/events     — SSE stream of workload state changes
+//	POST   /paths/{workload_id}/complete   — release paths when workload is done
+//	POST   /paths/{workload_id}/heartbeat  — extend workload lease
+//	GET    /paths/state                    — allocation table snapshot (all topologies)
+package api
+
+import (
+	"context"
+	"encoding/json"
+	"log/slog"
+	"net/http"
+
+	"github.com/jalapeno/scoville/internal/allocation"
+	"github.com/jalapeno/scoville/internal/graph"
+	"github.com/jalapeno/scoville/internal/southbound"
+	"github.com/jalapeno/scoville/pkg/apitypes"
+)
+
+// Server holds the shared state accessed by all HTTP handlers.
+type Server struct {
+	store  *graph.Store
+	tables *allocation.TableSet
+	driver southbound.SouthboundDriver
+	log    *slog.Logger
+}
+
+// New creates a new API server backed by a no-op southbound driver. The store
+// and tables are shared with the rest of the controller and must not be nil.
+func New(store *graph.Store, tables *allocation.TableSet, log *slog.Logger) *Server {
+	return NewWithDriver(store, tables, nil, log)
+}
+
+// NewWithDriver creates a new API server with an explicit southbound driver.
+// Pass nil for driver to use a no-op (pull-only) driver.
+func NewWithDriver(store *graph.Store, tables *allocation.TableSet, driver southbound.SouthboundDriver, log *slog.Logger) *Server {
+	s := &Server{store: store, tables: tables, driver: driver, log: log}
+	if s.driver == nil {
+		s.driver = noopDriver{}
+	}
+	// Register the release callback so the driver can delete forwarding state
+	// when a workload's paths are freed (drain timer, lease expiry, etc.).
+	tables.SetOnRelease(func(topoID, workloadID string, paths []*graph.Path) {
+		flows := southbound.EncodeFlows(paths)
+		if len(flows) == 0 {
+			return
+		}
+		go func() {
+			ctx := context.Background()
+			if gd, ok := s.driver.(interface {
+				DeleteFlows(context.Context, string, []southbound.EncodedFlow) error
+			}); ok {
+				if err := gd.DeleteFlows(ctx, topoID, flows); err != nil {
+					s.log.Warn("southbound: DeleteFlows failed", "workload_id", workloadID, "error", err)
+				}
+			} else {
+				if err := s.driver.DeleteWorkload(ctx, workloadID); err != nil {
+					s.log.Warn("southbound: DeleteWorkload failed", "workload_id", workloadID, "error", err)
+				}
+			}
+		}()
+	})
+	return s
+}
+
+// noopDriver is used when no explicit southbound driver is configured.
+type noopDriver struct{}
+
+func (noopDriver) ProgramWorkload(_ context.Context, _ *southbound.ProgramRequest) error {
+	return nil
+}
+func (noopDriver) DeleteWorkload(_ context.Context, _ string) error { return nil }
+
+// Handler returns an http.Handler with all routes registered.
+func (s *Server) Handler() http.Handler {
+	mux := http.NewServeMux()
+
+	mux.HandleFunc("POST /topology", s.handleTopologyPush)
+	mux.HandleFunc("GET /topology", s.handleTopologyList)
+	mux.HandleFunc("GET /topology/{id}", s.handleTopologyGet)
+	mux.HandleFunc("DELETE /topology/{id}", s.handleTopologyDelete)
+
+	mux.HandleFunc("POST /paths/request", s.handlePathRequest)
+	mux.HandleFunc("GET /paths/state", s.handlePathState)
+	mux.HandleFunc("GET /paths/{workload_id}", s.handleWorkloadStatus)
+	mux.HandleFunc("GET /paths/{workload_id}/events", s.handleWorkloadEvents)
+	mux.HandleFunc("GET /paths/{workload_id}/flows", s.handleWorkloadFlows)
+	mux.HandleFunc("POST /paths/{workload_id}/complete", s.handleWorkloadComplete)
+	mux.HandleFunc("POST /paths/{workload_id}/heartbeat", s.handleHeartbeat)
+
+	return mux
+}
+
+// --- helpers --------------------------------------------------------------
+
+func writeJSON(w http.ResponseWriter, status int, v any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(v)
+}
+
+func writeError(w http.ResponseWriter, status int, msg string, detail ...string) {
+	writeJSON(w, status, apitypes.ErrorResponse{Error: msg, Detail: detail})
+}
+
+func decodeJSON(r *http.Request, dst any) error {
+	return json.NewDecoder(r.Body).Decode(dst)
+}

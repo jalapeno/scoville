@@ -1,0 +1,13 @@
+# Compiled binaries
+scoville
+srnc
+
+# Test output
+*.test
+*.out
+
+# Go workspace
+/vendor/
+
+# macOS
+.DS_Store

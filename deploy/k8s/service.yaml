@@ -1,0 +1,41 @@
+---
+# ClusterIP: scoville API reachable by other pods in the cluster
+# (simulated scheduler, future UI pod, etc.)
+apiVersion: v1
+kind: Service
+metadata:
+  name: scoville
+  namespace: scoville
+  labels:
+    app: scoville
+spec:
+  selector:
+    app: scoville
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+      protocol: TCP
+  type: ClusterIP
+
+---
+# NodePort: external access from your laptop / containerlab VM
+# for kubectl port-forward, curl, and the scheduler sim.
+# Change to LoadBalancer if your private cloud has a cloud LB controller.
+apiVersion: v1
+kind: Service
+metadata:
+  name: scoville-external
+  namespace: scoville
+  labels:
+    app: scoville
+spec:
+  selector:
+    app: scoville
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+      nodePort: 30080    # access via http://<node-ip>:30080
+      protocol: TCP
+  type: NodePort

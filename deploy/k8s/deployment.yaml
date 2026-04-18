@@ -1,0 +1,86 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: scoville
+  namespace: scoville
+  labels:
+    app: scoville
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: scoville
+  template:
+    metadata:
+      labels:
+        app: scoville
+    spec:
+      containers:
+        - name: scoville
+          # Replace with your actual registry/image:tag after building.
+          # Example: ghcr.io/jalapeno/scoville:latest
+          image: scoville:latest
+          imagePullPolicy: IfNotPresent
+
+          args:
+            - --addr=:8080
+            - --bmp
+            - --nats-url=$(NATS_URL)
+            - --bmp-topo=$(BMP_TOPO)
+            - --bmp-consumer=$(BMP_CONSUMER)
+            - --encap-mode=$(ENCAP_MODE)
+            - --gnmi-target-map=$(GNMI_TARGET_MAP)
+
+          env:
+            - name: NATS_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: scoville-config
+                  key: NATS_URL
+            - name: BMP_TOPO
+              valueFrom:
+                configMapKeyRef:
+                  name: scoville-config
+                  key: BMP_TOPO
+            - name: BMP_CONSUMER
+              valueFrom:
+                configMapKeyRef:
+                  name: scoville-config
+                  key: BMP_CONSUMER
+            - name: ENCAP_MODE
+              valueFrom:
+                configMapKeyRef:
+                  name: scoville-config
+                  key: ENCAP_MODE
+            - name: GNMI_TARGET_MAP
+              valueFrom:
+                configMapKeyRef:
+                  name: scoville-config
+                  key: GNMI_TARGET_MAP
+
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+
+          readinessProbe:
+            httpGet:
+              path: /topology
+              port: http
+            initialDelaySeconds: 3
+            periodSeconds: 5
+
+          livenessProbe:
+            httpGet:
+              path: /topology
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 15
+
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "64Mi"
+            limits:
+              cpu: "500m"
+              memory: "256Mi"

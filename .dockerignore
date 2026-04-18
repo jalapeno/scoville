@@ -1,0 +1,14 @@
+# Build artifacts
+scoville
+*.test
+*.out
+vendor/
+
+# Development files
+.git/
+examples/
+deploy/
+
+# IDE / OS
+.DS_Store
+*.swp

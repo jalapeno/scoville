@@ -1,0 +1,101 @@
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: nats-config
+  namespace: jalapeno
+data:
+  nats-server.conf: |
+    port: 4222
+    monitor_port: 8222
+
+    jetstream {
+      # Memory store is fine for dev/test.
+      # For persistence across pod restarts, switch to:
+      #   store_dir: /data
+      # and uncomment the PersistentVolumeClaim below.
+      max_memory_store: 1GB
+    }
+
+    # Allow all clients without auth (adjust for production).
+    no_auth_user: anon
+    accounts {
+      $G {
+        users: [{user: anon, password: ""}]
+        jetstream: enabled
+      }
+    }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nats
+  namespace: jalapeno
+  labels:
+    app: nats
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: nats
+  template:
+    metadata:
+      labels:
+        app: nats
+    spec:
+      containers:
+        - name: nats
+          image: nats:2-alpine
+          args:
+            - -c
+            - /etc/nats/nats-server.conf
+          ports:
+            - name: client
+              containerPort: 4222
+            - name: monitor
+              containerPort: 8222
+          volumeMounts:
+            - name: config
+              mountPath: /etc/nats
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8222
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8222
+            initialDelaySeconds: 10
+            periodSeconds: 15
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 1Gi
+      volumes:
+        - name: config
+          configMap:
+            name: nats-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: nats
+  namespace: jalapeno
+  labels:
+    app: nats
+spec:
+  selector:
+    app: nats
+  ports:
+    - name: client
+      port: 4222
+      targetPort: 4222
+    - name: monitor
+      port: 8222
+      targetPort: 8222
+  type: ClusterIP
