@@ -48,8 +48,10 @@ spec:
           - "5"
           - --source-port
           - "5000"
+          - --kafka-server
+          - broker.jalapeno:9092        # existing Jalapeno Kafka — keeps igp-graph etc. working
           - --nats-server
-          - nats://nats.jalapeno:4222   # ← update if your NATS service name/namespace differs
+          - nats://nats.jalapeno:4222   # scoville consumes from here
           image: docker.io/sbezverk/gobmp:latest
           imagePullPolicy: Always
           name: gobmp
