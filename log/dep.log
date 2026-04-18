@@ -1,6 +1,9 @@
-$ kubectl logs -n scoville -f deployment/scoville
-time=2026-04-18T18:54:04.419Z level=INFO msg="southbound: host mode (pull via /flows)"
-time=2026-04-18T18:54:04.419Z level=INFO msg="bmp collector configured" nats_url=nats://nats.jalapeno.svc.cluster.local:4222 topo_id=underlay
-time=2026-04-18T18:54:04.419Z level=INFO msg="scoville starting" addr=:8080 bmp=true encap_mode=host
-time=2026-04-18T18:54:04.423Z level=ERROR msg="bmp collector error" err="subscribe gobmp.parsed.peer: nats: stream not found"
-time=2026-04-18T18:54:04.434Z level=WARN msg="nats disconnected" err=<nil>
+$ kubectl logs -f -n scoville scoville-7769856d59-vgtns
+time=2026-04-18T20:08:07.077Z level=INFO msg="southbound: host mode (pull via /flows)"
+time=2026-04-18T20:08:07.077Z level=INFO msg="bmp collector configured" nats_url=nats://nats.jalapeno.svc.cluster.local:4222 topo_id=underlay
+time=2026-04-18T20:08:07.077Z level=INFO msg="scoville starting" addr=:8080 bmp=true encap_mode=host
+time=2026-04-18T20:08:07.080Z level=WARN msg="bmp subscribe failed, retrying" err="subscribe gobmp.parsed.ls_node: nats: no stream matches subject" delay=3s
+time=2026-04-18T20:08:10.081Z level=WARN msg="bmp subscribe failed, retrying" err="subscribe gobmp.parsed.peer: nats: no stream matches subject" delay=6s
+time=2026-04-18T20:08:16.086Z level=WARN msg="bmp subscribe failed, retrying" err="subscribe gobmp.parsed.ls_link: nats: no stream matches subject" delay=12s
+time=2026-04-18T20:08:28.088Z level=WARN msg="bmp subscribe failed, retrying" err="subscribe gobmp.parsed.ls_node: nats: no stream matches subject" delay=24s
+time=2026-04-18T20:08:52.089Z level=WARN msg="bmp subscribe failed, retrying" err="subscribe gobmp.parsed.ls_node: nats: no stream matches subject" delay=48s
