@@ -4,10 +4,9 @@ metadata:
   name: scoville-config
   namespace: scoville
 data:
-  # NATS URL pointing to the GoBMP NATS service.
-  # Adjust to match your NATS service name and namespace, e.g.:
-  #   nats://nats.gobmp.svc.cluster.local:4222
-  NATS_URL: "nats://nats.gobmp.svc.cluster.local:4222"
+  # NATS URL — must match the service name and namespace where NATS is deployed.
+  # NATS is in the jalapeno namespace alongside GoBMP.
+  NATS_URL: "nats://nats.jalapeno.svc.cluster.local:4222"
 
   # Topology ID assigned to the BMP-learned underlay graph.
   BMP_TOPO: "underlay"
