@@ -392,3 +392,268 @@ Actual output confirmed:
     ]
 }
 ```
+
+---
+
+## Session: AF graph split, policy mapping, rename to syd (2026-04-19)
+
+### Deploy checklist
+
+```bash
+# Pull latest on the k8s node
+cd ~/src/syd
+git pull
+
+# Rebuild and reload image
+docker build -t syd:latest .
+docker save syd:latest | sudo k3s ctr images import -
+
+# Rolling restart to pick up new image
+kubectl -n syd rollout restart deployment/syd
+kubectl -n syd rollout status deployment/syd
+
+# Watch startup — you should now see TWO topology IDs populate
+kubectl -n syd logs -f deployment/syd | grep -E "topology|starting|bmp"
+```
+
+---
+
+### 1. Verify AF graph split
+
+After BMP converges, two topology graphs should exist: `underlay` (IPv6/SRv6,
+MTID=2 links only) and `underlay-v4` (IPv4/base-topology, MTID=0 links).
+
+```bash
+NODE=<your-node-ip>
+
+# Both graphs should appear in the list
+curl -s http://$NODE:30080/topology | python3 -m json.tool
+# Expected: {"topology_ids": ["underlay", "underlay-v4"]}
+
+# underlay should have nodes but ONLY IPv6/SRv6 links
+curl -s http://$NODE:30080/topology/underlay | python3 -m json.tool
+
+# underlay-v4 should have the same nodes but only IPv4 links
+curl -s http://$NODE:30080/topology/underlay-v4 | python3 -m json.tool
+```
+
+Sanity check via NATS — confirm MTID values in raw ls_link messages:
+
+```bash
+kubectl -n jalapeno port-forward svc/nats 4222:4222 &
+
+# Show MTID for each link (should see mt_id_tlv.mt_id = 0 for IPv4, 2 for IPv6)
+nats -s nats://localhost:4222 consumer next goBMP \
+  --subject gobmp.parsed.ls_link --all --count 500 --raw 2>/dev/null \
+  | python3 -c "
+import sys, json
+for line in sys.stdin:
+    line = line.strip()
+    if not line: continue
+    try:
+        m = json.loads(line)
+        mtid = (m.get('mt_id_tlv') or {}).get('mt_id', 'absent')
+        src = m.get('igp_router_id','?')
+        dst = m.get('remote_igp_router_id','?')
+        lip = m.get('local_link_ip','')
+        print(f'MTID={mtid:>6}  {src} -> {dst}  {lip}')
+    except: pass" | sort
+
+kill %1
+```
+
+Expected: IPv4 link IPs (10.x.x.x / 172.x.x.x) have MTID=0, IPv6 link IPs
+(fc00::/32 range) have MTID=2.
+
+---
+
+### 2. Test path request — expect uA SIDs on BOTH directions now
+
+The key fix: the reverse path SPF no longer picks IPv4 links (no uA SIDs).
+Both forward and reverse should now show packed uA+uN containers.
+
+```bash
+# xrd01 ↔ xrd16 (use xrd16 — xrd28 has no Flex-Algo links)
+curl -s -X POST http://$NODE:30080/paths/request \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "topology_id": "underlay",
+    "workload_id": "test-af-split",
+    "endpoints": [
+      {"id": "0000.0000.0001"},
+      {"id": "0000.0000.0016"}
+    ]
+  }' | python3 -c "
+import sys, json
+d = json.load(sys.stdin)
+for p in d['paths']:
+    print(f'{p[\"src_id\"]} -> {p[\"dst_id\"]}')
+    print(f'  sids: {p[\"segment_list\"][\"sids\"]}')
+    print(f'  hops: {p[\"metric\"][\"hop_count\"]}')
+"
+```
+
+**What to look for:**
+- Before fix: reverse path had only uN SIDs (e.g. `fc00:0:16:1::` — no `eXXX` function)
+- After fix: both directions should have uA SIDs with non-zero function parts
+  (e.g. `fc00:0:1:e002:...` forward, `fc00:0:16:eXXX:...` reverse)
+
+Also check flows for the packed SRH:
+
+```bash
+curl -s http://$NODE:30080/paths/test-af-split/flows | python3 -c "
+import sys, json
+d = json.load(sys.stdin)
+for f in d['flows']:
+    srh = '+ SRH' if f.get('srh_raw') else ''
+    print(f'{f[\"src_node_id\"]} -> {f[\"dst_node_id\"]}')
+    print(f'  segment_list: {f[\"segment_list\"]}')
+    print(f'  outer_da: {f[\"outer_da\"]} {srh}')
+"
+```
+
+Cleanup:
+```bash
+curl -s -X POST http://$NODE:30080/paths/test-af-split/complete \
+  -H 'Content-Type: application/json' -d '{"immediate":true}'
+```
+
+---
+
+### 3. Flex-Algo path request (regression check)
+
+```bash
+curl -s -X POST http://$NODE:30080/paths/request \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "topology_id": "underlay",
+    "workload_id": "test-algo128",
+    "endpoints": [
+      {"id": "0000.0000.0001"},
+      {"id": "0000.0000.0016"}
+    ],
+    "constraints": {"algo_id": 128}
+  }' | python3 -c "
+import sys, json
+d = json.load(sys.stdin)
+for p in d['paths']:
+    print(f'{p[\"src_id\"]} -> {p[\"dst_id\"]}  sids={p[\"segment_list\"][\"sids\"]}')
+"
+
+curl -s -X POST http://$NODE:30080/paths/test-algo128/complete \
+  -H 'Content-Type: application/json' -d '{"immediate":true}'
+```
+
+---
+
+### 4. Policy mapping API
+
+Register a human-readable name for algo 128 and use it in a path request.
+
+```bash
+# Register policies on the underlay topology
+curl -s -X POST http://$NODE:30080/topology/underlay/policies \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "policies": [
+      {"name": "latency-optimized", "algo_id": 128},
+      {"name": "carbon-optimized",  "algo_id": 130}
+    ]
+  }' | python3 -m json.tool
+
+# Verify
+curl -s http://$NODE:30080/topology/underlay/policies | python3 -m json.tool
+
+# Request a path using the policy name instead of raw algo_id
+curl -s -X POST http://$NODE:30080/paths/request \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "topology_id": "underlay",
+    "workload_id": "test-policy",
+    "endpoints": [
+      {"id": "0000.0000.0001"},
+      {"id": "0000.0000.0016"}
+    ],
+    "policy": "latency-optimized"
+  }' | python3 -c "
+import sys, json
+d = json.load(sys.stdin)
+for p in d['paths']:
+    print(f'{p[\"src_id\"]} -> {p[\"dst_id\"]}  sids={p[\"segment_list\"][\"sids\"]}')
+"
+# Should produce identical results to constraints.algo_id=128
+
+# Test unknown policy → expect 422
+curl -s -o /dev/null -w '%{http_code}\n' \
+  -X POST http://$NODE:30080/paths/request \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "topology_id": "underlay",
+    "workload_id": "test-bad-policy",
+    "endpoints": [{"id":"0000.0000.0001"},{"id":"0000.0000.0016"}],
+    "policy": "nonexistent"
+  }'
+# Expected: 422
+
+curl -s -X POST http://$NODE:30080/paths/test-policy/complete \
+  -H 'Content-Type: application/json' -d '{"immediate":true}'
+
+# Remove a policy (algo_id=0 means delete)
+curl -s -X POST http://$NODE:30080/topology/underlay/policies \
+  -H 'Content-Type: application/json' \
+  -d '{"policies": [{"name": "carbon-optimized", "algo_id": 0}]}' \
+  | python3 -m json.tool
+# carbon-optimized should be gone; latency-optimized remains
+```
+
+---
+
+### 5. Incremental topology push (regression check)
+
+Push a minimal topology, allocate a workload, push an updated topology with one
+node removed, and verify only the affected workload drains.
+
+```bash
+# Push v1 — three nodes A, B, C in a line A--B--C with endpoints
+curl -s -X POST http://$NODE:30080/topology \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "topology_id": "test-incr",
+    "nodes":      [{"id":"A"},{"id":"B"},{"id":"C"}],
+    "interfaces": [{"id":"A-eth0","owner_node_id":"A"},{"id":"B-eth0","owner_node_id":"B"},
+                   {"id":"B-eth1","owner_node_id":"B"},{"id":"C-eth0","owner_node_id":"C"}],
+    "edges": [
+      {"id":"AB","type":"igp_adjacency","src_id":"A","dst_id":"B","igp_metric":1},
+      {"id":"BA","type":"igp_adjacency","src_id":"B","dst_id":"A","igp_metric":1},
+      {"id":"BC","type":"igp_adjacency","src_id":"B","dst_id":"C","igp_metric":1},
+      {"id":"CB","type":"igp_adjacency","src_id":"C","dst_id":"B","igp_metric":1}
+    ]
+  }' | python3 -m json.tool
+
+# Allocate a workload that traverses C
+curl -s -X POST http://$NODE:30080/paths/request \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "topology_id":"test-incr","workload_id":"wl-through-c",
+    "endpoints":[{"id":"A"},{"id":"C"}]
+  }' | python3 -m json.tool
+
+# Push v2 — node C removed
+curl -s -X POST http://$NODE:30080/topology \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "topology_id": "test-incr",
+    "nodes":      [{"id":"A"},{"id":"B"}],
+    "interfaces": [{"id":"A-eth0","owner_node_id":"A"},{"id":"B-eth0","owner_node_id":"B"}],
+    "edges": [
+      {"id":"AB","type":"igp_adjacency","src_id":"A","dst_id":"B","igp_metric":1},
+      {"id":"BA","type":"igp_adjacency","src_id":"B","dst_id":"A","igp_metric":1}
+    ]
+  }' | python3 -m json.tool
+
+# wl-through-c should now be DRAINING with reason=topology_change
+curl -s http://$NODE:30080/paths/wl-through-c | python3 -m json.tool
+
+# Cleanup
+curl -s -X DELETE http://$NODE:30080/topology/test-incr
+```
