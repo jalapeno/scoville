@@ -196,11 +196,20 @@ func translateLSLink(msg *gobmpmsg.LSLink) (iface *graph.Interface, edge *graph.
 		if x == nil || x.SID == "" {
 			continue
 		}
+		// Extract SID Structure sub-TLV so TryPackUSID can compute correct slot width.
+		var structure *srv6.SIDStructure
+		for _, stlv := range x.SubTLVs {
+			if s, ok := stlv.(*gobmpsrv6.SIDStructure); ok {
+				structure = sidStructure(s)
+				break
+			}
+		}
 		uaSIDs = append(uaSIDs, srv6.UASID{
 			SID: srv6.SID{
-				Value:    x.SID,
-				Behavior: srv6.BehaviorEndX,
-				AlgoID:   x.Algorithm,
+				Value:     x.SID,
+				Behavior:  srv6.BehaviorEndX,
+				Structure: structure,
+				AlgoID:    x.Algorithm,
 			},
 			Weight: x.Weight,
 		})

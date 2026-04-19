@@ -58,27 +58,143 @@ Once the containerlab BMP streams are flowing, the topology will start populatin
 
 ### BMP
 
-First grab a couple of node IDs from the graph:
+cisco@jalapeno-host:~/scoville$ curl -s http://localhost:30080/topology/underlay/nodes | python3 -m json.tool | grep name
+            "name": "xrd01"
+            "name": "xrd15"
+            "name": "xrd25"
+            "name": "xrd08"
+            "name": "xrd29"
+            "name": "xrd18"
+            "name": "xrd07"
+            "name": "xrd09"
+            "name": "xrd06"
+            "name": "xrd31"
+            "name": "xrd02"
+            "name": "xrd32"
+            "name": "xrd28"
+            "name": "xrd17"
+            "name": "xrd03"
+            "name": "xrd16"
+            "name": "xrd04"
+cisco@jalapeno-host:~/scoville$ curl -s -X POST http://localhost:30080/paths/request   -H 'Content-Type: application/json'   -d '{
+    "topology_id": "underlay",
+    "workload_id": "test-xrd01-xrd28",
+    "endpoints": [
+      {"id": "0000.0000.0001"},
+      {"id": "0000.0000.0028"}
+    ]
+  }' | python3 -m json.tool
+{
+    "workload_id": "test-xrd01-xrd28",
+    "topology_id": "underlay",
+    "paths": [
+        {
+            "src_id": "",
+            "dst_id": "",
+            "segment_list": {
+                "encap": "SRv6",
+                "flavor": "H.Encaps.Red",
+                "sids": [
+                    "fc00:0:1:e002::",
+                    "fc00:0:4:e004::",
+                    "fc00:0:16::",
+                    "fc00:0:28::"
+                ]
+            },
+            "metric": {
+                "igp_metric": 12,
+                "delay_us": 65,
+                "hop_count": 3
+            },
+            "path_id": "test-xrd01-xrd28-1776571627833027192-0"
+        },
+        {
+            "src_id": "",
+            "dst_id": "",
+            "segment_list": {
+                "encap": "SRv6",
+                "flavor": "H.Encaps.Red",
+                "sids": [
+                    "fc00:0:28::",
+                    "fc00:0:16::",
+                    "fc00:0:4::",
+                    "fc00:0:1::"
+                ]
+            },
+            "metric": {
+                "igp_metric": 3,
+                "delay_us": 70,
+                "hop_count": 3
+            },
+            "path_id": "test-xrd01-xrd28-1776571627833027192-1"
+        }
+    ],
+    "allocation_state": {
+        "paths_from_free": 0,
+        "paths_from_shared": 0,
+        "total_free_after": 0
+    }
+}
+cisco@jalapeno-host:~/scoville$ curl -s http://localhost:30080/paths/test-xrd01-xrd28/flows | python3 -m json.tool
+{
+    "workload_id": "test-xrd01-xrd28",
+    "topology_id": "underlay",
+    "flows": [
+        {
+            "src_node_id": "",
+            "dst_node_id": "",
+            "path_id": "test-xrd01-xrd28-1776571627833027192-0",
+            "segment_list": [
+                "fc00:0:1:e002::",
+                "fc00:0:4:e004::",
+                "fc00:0:16::",
+                "fc00:0:28::"
+            ],
+            "encap_flavor": "H.Encaps.Red",
+            "outer_da": "fc00:0:1:e002::",
+            "srh_raw": "OwgEAwMAAAD8AAAAACgAAAAAAAAAAAAA/AAAAAAWAAAAAAAAAAAAAPwAAAAABOAEAAAAAAAAAAD8AAAAAAHgAgAAAAAAAAAA"
+        },
+        {
+            "src_node_id": "",
+            "dst_node_id": "",
+            "path_id": "test-xrd01-xrd28-1776571627833027192-1",
+            "segment_list": [
+                "fc00:0:28::",
+                "fc00:0:16::",
+                "fc00:0:4::",
+                "fc00:0:1::"
+            ],
+            "encap_flavor": "H.Encaps.Red",
+            "outer_da": "fc00:0:28::",
+            "srh_raw": "OwgEAwMAAAD8AAAAAAEAAAAAAAAAAAAA/AAAAAAEAAAAAAAAAAAAAPwAAAAAFgAAAAAAAAAAAAD8AAAAACgAAAAAAAAAAAAA"
+        }
+    ]
+}
 
 ```
-curl -s http://<node-ip>:30080/topology/underlay | python3 -c "
+curl -s -X POST http://localhost:30080/paths/request \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "topology_id": "underlay",
+    "workload_id": "test-alltoall-4",
+    "endpoints": [
+      {"id": "0000.0000.0001"},
+      {"id": "0000.0000.0002"},
+      {"id": "0000.0000.0028"},
+      {"id": "0000.0000.0029"}
+    ],
+    "disjointness": "link",
+    "pairing_mode": "all_directed"
+  }' | python3 -c "
 import sys, json
 d = json.load(sys.stdin)
-nodes = [v['id'] for v in d.get('vertices', []) if v.get('type') == 'node']
-print('nodes:', nodes[:6])
+print(f'workload: {d[\"workload_id\"]}')
+print(f'paths: {len(d[\"paths\"])}')
+for p in d['paths']:
+    sids = p['segment_list']['sids']
+    print(f'  {p[\"src_id\"]} -> {p[\"dst_id\"]}  hops={p[\"metric\"][\"hop_count\"]}  sids={len(sids)}')
 "
 ```
-
-Then point the scheduler at it:
-```
-python3 examples/scheduler-sim/scheduler.py \
-  --scoville http://<node-ip>:30080 \
-  --topology underlay \
-  --endpoints <node-id-1>,<node-id-2> \
-  --scenario basic
-```
-This will request SRv6 paths across your live BGP-LS topology — the first real end-to-end test of the whole stack.
-
 
 
 ### Debugging gobmp-nats
