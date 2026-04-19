@@ -785,3 +785,141 @@ curl -s -X POST http://$NODE:30080/paths/wl-srv6-push/complete \
   -H 'Content-Type: application/json' -d '{"immediate":true}'
 curl -s -X DELETE http://$NODE:30080/topology/test-srv6
 ```
+
+---
+
+## Session: BMP peer and unicast prefix graphs (2026-04-19)
+
+### Deploy checklist
+
+```bash
+cd ~/src/syd && git pull
+docker build -t syd:latest .
+docker save syd:latest | sudo k3s ctr images import -
+kubectl -n syd rollout restart deployment/syd
+kubectl -n syd rollout status deployment/syd
+```
+
+After BMP converges, five topology graphs should exist.
+
+---
+
+### 1. Verify all five topology graphs
+
+```bash
+NODE=<your-node-ip>
+
+curl -s http://$NODE:30080/topology | python3 -m json.tool
+```
+
+Expected (order may vary):
+```json
+{"topology_ids": ["underlay", "underlay-v4", "underlay-peers", "underlay-prefixes-v4", "underlay-prefixes-v6"]}
+```
+
+Check each graph's stats — vertex/edge counts confirm data is flowing:
+
+```bash
+for topo in underlay underlay-v4 underlay-peers underlay-prefixes-v4 underlay-prefixes-v6; do
+  echo "=== $topo ==="
+  curl -s http://$NODE:30080/topology/$topo | python3 -c "
+import sys, json
+d = json.load(sys.stdin)
+print(f'  nodes={d[\"nodes\"]}  edges={d[\"total_edges\"]}  prefixes={d.get(\"prefixes\",0)}')
+"
+done
+```
+
+Rough expected counts (17-node XRd testbed):
+- `underlay`: ~17 nodes, ~100+ edges (IPv6/SRv6 links + interfaces + ownership)
+- `underlay-v4`: ~17 nodes, ~100+ edges (IPv4 links)
+- `underlay-peers`: nodes = unique BGP endpoint IPs, edges = BGP sessions
+- `underlay-prefixes-v4`: prefix vertices + nexthop nodes
+- `underlay-prefixes-v6`: prefix vertices + nexthop nodes
+
+---
+
+### 2. Inspect peer topology
+
+```bash
+# List node IDs (BGP endpoint IPs) in the peers graph
+curl -s http://$NODE:30080/topology/underlay-peers/nodes | python3 -m json.tool | head -30
+
+# Spot-check: show BGP session edges (raw graph endpoint)
+curl -s "http://$NODE:30080/topology/underlay-peers/graph" | python3 -c "
+import sys, json
+d = json.load(sys.stdin)
+print(f'Peer nodes: {len(d[\"nodes\"])}')
+for lnk in d.get('links', []):
+    print(f'  BGP session: {lnk[\"source\"]} -> {lnk[\"target\"]}')
+" | head -30
+```
+
+You should see BGP peer IP pairs (e.g. 10.0.0.x ↔ 10.x.x.x loopbacks).
+
+---
+
+### 3. Inspect prefix topologies
+
+```bash
+# IPv4 prefix stats
+curl -s http://$NODE:30080/topology/underlay-prefixes-v4 | python3 -m json.tool
+
+# IPv6 prefix stats
+curl -s http://$NODE:30080/topology/underlay-prefixes-v6 | python3 -m json.tool
+
+# Sample IPv4 prefix vertices and their nexthop nodes
+curl -s "http://$NODE:30080/topology/underlay-prefixes-v4/graph" | python3 -c "
+import sys, json
+d = json.load(sys.stdin)
+print(f'Prefix nodes: {len(d[\"nodes\"])}  Links (prefix→nexthop): {len(d.get(\"links\",[]))}')
+# Show first 10 prefix vertices
+pfx_nodes = [n for n in d['nodes'] if n['id'].startswith('pfx:')]
+for n in pfx_nodes[:10]:
+    print(f'  {n[\"id\"]}')
+" 
+
+# Same for IPv6
+curl -s "http://$NODE:30080/topology/underlay-prefixes-v6/graph" | python3 -c "
+import sys, json
+d = json.load(sys.stdin)
+pfx_nodes = [n for n in d['nodes'] if n['id'].startswith('pfx:')]
+print(f'IPv6 prefixes: {len(pfx_nodes)}')
+for n in pfx_nodes[:5]:
+    print(f'  {n[\"id\"]}')
+"
+```
+
+---
+
+### 4. Check vertex_ids and edge_ids in path responses
+
+Path responses now include the ordered list of node vertex IDs and link edge
+IDs traversed — used by the UI for path highlighting.
+
+```bash
+curl -s -X POST http://$NODE:30080/paths/request \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "topology_id": "underlay",
+    "workload_id": "test-vertexids",
+    "endpoints": [
+      {"id": "0000.0000.0001"},
+      {"id": "0000.0000.0016"}
+    ]
+  }' | python3 -c "
+import sys, json
+d = json.load(sys.stdin)
+for p in d['paths']:
+    print(f'{p[\"src_id\"]} -> {p[\"dst_id\"]}')
+    print(f'  sids:       {p[\"segment_list\"][\"sids\"]}')
+    print(f'  vertex_ids: {p.get(\"vertex_ids\",[])}')
+    print(f'  edge_ids:   {p.get(\"edge_ids\",[])}')
+"
+
+curl -s -X POST http://$NODE:30080/paths/test-vertexids/complete \
+  -H 'Content-Type: application/json' -d '{"immediate":true}'
+```
+
+Expected: `vertex_ids` = IS-IS system IDs in hop order; `edge_ids` = `link:*` IDs.
+

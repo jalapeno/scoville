@@ -99,6 +99,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /topology/{id}/policies", s.handlePoliciesSet)
 	mux.HandleFunc("GET /topology/{id}/policies", s.handlePoliciesGet)
 	mux.HandleFunc("DELETE /topology/{id}/policies", s.handlePoliciesDelete)
+	mux.HandleFunc("GET /topology/{id}/graph", s.handleTopologyGraph)
 
 	mux.HandleFunc("POST /paths/request", s.handlePathRequest)
 	mux.HandleFunc("GET /paths/state", s.handlePathState)
