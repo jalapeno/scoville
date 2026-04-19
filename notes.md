@@ -1,63 +1,84 @@
 1. On the k8s node — clone and deploy NATS first
 
-
+```
 git clone git@github.com:jalapeno/syd.git
 cd syd
-
+```
+```
 kubectl apply -f deploy/k8s/nats.yaml
+```
 
-# Wait for it to be ready
+Wait for it to be ready
+```
 kubectl -n jalapeno rollout status deployment/nats
-
+```
 ```
 nats-server: /etc/nats/nats-server.conf:15:3: "$G" is a Reserved Account
 ```
 
-# Quick sanity check — JetStream should show up
+Quick sanity check — JetStream should show up
+```
 kubectl -n jalapeno port-forward svc/nats 8222:8222 &
 curl -s http://localhost:8222/jsz | python3 -m json.tool | grep -E "config|memory"
 kill %1
+```
+
 2. Redeploy GoBMP with NATS config
 
-
+```
 kubectl apply -f deploy/k8s/gobmp-collector.yaml
-
+```
+```
 kubectl -n jalapeno rollout status deployment/gobmp
 kubectl -n jalapeno logs -f deployment/gobmp
+```
+
 In the logs you should see GoBMP connecting to NATS and publishing on gobmp.parsed.* subjects once your BMP sources are pointed at it.
 
 3. Build and deploy syd
 
 You'll need to build the image on the node (or on your Mac and load it):
 
-
+```
 # On the k8s node, from the repo root:
 docker build -t syd:latest .
 
 # For k3s:
 docker save syd:latest | sudo k3s ctr images import -
 
+# For Kubeadm:
+docker save syd:latest -o syd.tar
+sudo ctr -n=k8s.io images import syd.tar
+
 # For kind:
 kind load docker-image syd:latest
+```
+
 Then:
 
 
-# Update the NATS URL in the configmap to point at your jalapeno namespace NATS
-# It should be: nats://nats.jalapeno:4222
-# (the default in configmap.yaml is already set to that)
-
+Update the NATS URL in the configmap to point at your jalapeno namespace NATS
+It should be: nats://nats.jalapeno:4222
+(the default in configmap.yaml is already set to that)
+```
 kubectl apply -k deploy/k8s/
 kubectl -n syd rollout status deployment/syd
 kubectl -n syd logs -f deployment/syd
+```
 You should see:
-
-
+```
 level=INFO msg="bmp collector configured" nats_url=nats://nats.jalapeno:4222
 level=INFO msg="syd starting" addr=:8080 bmp=true encap_mode=host
+```
 Once the containerlab BMP streams are flowing, the topology will start populating and you can hit curl http://<node-ip>:30080/topology from your laptop.
 
 ### BMP
 
+Test - get underlay nodes
+```
+curl -s http://localhost:30080/topology/underlay/nodes | python3 -m json.tool | grep name
+```
+```
 cisco@jalapeno-host:~/syd$ curl -s http://localhost:30080/topology/underlay/nodes | python3 -m json.tool | grep name
             "name": "xrd01"
             "name": "xrd15"
@@ -76,7 +97,12 @@ cisco@jalapeno-host:~/syd$ curl -s http://localhost:30080/topology/underlay/node
             "name": "xrd03"
             "name": "xrd16"
             "name": "xrd04"
-cisco@jalapeno-host:~/syd$ curl -s -X POST http://localhost:30080/paths/request   -H 'Content-Type: application/json'   -d '{
+cisco@jalapeno-host:~/syd$ 
+```
+
+Test - path request
+```
+curl -s -X POST http://localhost:30080/paths/request   -H 'Content-Type: application/json'   -d '{
     "topology_id": "underlay",
     "workload_id": "test-xrd01-xrd28",
     "endpoints": [
@@ -84,6 +110,9 @@ cisco@jalapeno-host:~/syd$ curl -s -X POST http://localhost:30080/paths/request 
       {"id": "0000.0000.0028"}
     ]
   }' | python3 -m json.tool
+```
+
+```
 {
     "workload_id": "test-xrd01-xrd28",
     "topology_id": "underlay",
@@ -135,6 +164,11 @@ cisco@jalapeno-host:~/syd$ curl -s -X POST http://localhost:30080/paths/request 
         "total_free_after": 0
     }
 }
+```
+```
+curl -s http://localhost:30080/paths/test-xrd01-xrd28/flows | python3 -m json.tool
+```
+```
 cisco@jalapeno-host:~/syd$ curl -s http://localhost:30080/paths/test-xrd01-xrd28/flows | python3 -m json.tool
 {
     "workload_id": "test-xrd01-xrd28",
@@ -170,7 +204,9 @@ cisco@jalapeno-host:~/syd$ curl -s http://localhost:30080/paths/test-xrd01-xrd28
         }
     ]
 }
+```
 
+Test - get paths
 ```
 curl -s -X POST http://localhost:30080/paths/request \
   -H 'Content-Type: application/json' \
@@ -443,13 +479,16 @@ Sanity check via NATS — confirm MTID values in raw ls_link messages:
 kubectl -n jalapeno port-forward svc/nats 4222:4222 &
 
 # Show MTID for each link (should see mt_id_tlv.mt_id = 0 for IPv4, 2 for IPv6)
+# Note: nats consumer next --raw interleaves message headers with JSON bodies;
+# filter to lines starting with '{' to get only the JSON payloads.
 nats -s nats://localhost:4222 consumer next goBMP \
-  --subject gobmp.parsed.ls_link --all --count 500 --raw 2>/dev/null \
+  --subject gobmp.parsed.ls_link --count 500 --raw 2>/dev/null \
   | python3 -c "
 import sys, json
 for line in sys.stdin:
     line = line.strip()
-    if not line: continue
+    if not line.startswith('{'):
+        continue
     try:
         m = json.loads(line)
         mtid = (m.get('mt_id_tlv') or {}).get('mt_id', 'absent')
@@ -613,6 +652,12 @@ curl -s -X POST http://$NODE:30080/topology/underlay/policies \
 Push a minimal topology, allocate a workload, push an updated topology with one
 node removed, and verify only the affected workload drains.
 
+**Note:** This test uses a bare A-B-C topology with no SRv6 locators or uA SIDs
+— it is specifically testing drain/invalidation behavior. Path responses will
+show empty `segment_list.sids` arrays, which is expected. See the
+"Push topology with SRv6 data" section below if you want to test actual SID
+encoding via the push API.
+
 ```bash
 # Push v1 — three nodes A, B, C in a line A--B--C with endpoints
 curl -s -X POST http://$NODE:30080/topology \
@@ -656,4 +701,87 @@ curl -s http://$NODE:30080/paths/wl-through-c | python3 -m json.tool
 
 # Cleanup
 curl -s -X DELETE http://$NODE:30080/topology/test-incr
+```
+
+---
+
+### 6. Push topology with SRv6 data
+
+To test the full SRv6 SID encoding path via the push API (not BMP), you need
+to include `srv6_locators` on nodes and `srv6_ua_sids` on interfaces.
+This example mirrors a minimal two-node topology with uN + uA SIDs:
+
+```bash
+curl -s -X POST http://$NODE:30080/topology \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "topology_id": "test-srv6",
+    "nodes": [
+      {
+        "id": "0000.0000.0001",
+        "name": "r1",
+        "srv6_locators": [
+          {"prefix": "fc00:0:1::/48", "block_len": 32, "node_len": 16,
+           "func_len": 0, "arg_len": 0, "algo_id": 0}
+        ]
+      },
+      {
+        "id": "0000.0000.0002",
+        "name": "r2",
+        "srv6_locators": [
+          {"prefix": "fc00:0:2::/48", "block_len": 32, "node_len": 16,
+           "func_len": 0, "arg_len": 0, "algo_id": 0}
+        ]
+      }
+    ],
+    "interfaces": [
+      {
+        "id": "r1-eth0", "owner_node_id": "0000.0000.0001",
+        "srv6_ua_sids": [
+          {"sid": "fc00:0:1:e001::", "func_len": 16, "algo_id": 0,
+           "neighbor_node_id": "0000.0000.0002"}
+        ]
+      },
+      {
+        "id": "r2-eth0", "owner_node_id": "0000.0000.0002",
+        "srv6_ua_sids": [
+          {"sid": "fc00:0:2:e001::", "func_len": 16, "algo_id": 0,
+           "neighbor_node_id": "0000.0000.0001"}
+        ]
+      }
+    ],
+    "edges": [
+      {"id":"r1r2","type":"igp_adjacency","src_id":"0000.0000.0001",
+       "dst_id":"0000.0000.0002","igp_metric":1,
+       "src_iface_id":"r1-eth0","dst_iface_id":"r2-eth0"},
+      {"id":"r2r1","type":"igp_adjacency","src_id":"0000.0000.0002",
+       "dst_id":"0000.0000.0001","igp_metric":1,
+       "src_iface_id":"r2-eth0","dst_iface_id":"r1-eth0"}
+    ]
+  }' | python3 -m json.tool
+
+# Request paths — should produce uA SIDs on both directions
+curl -s -X POST http://$NODE:30080/paths/request \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "topology_id": "test-srv6",
+    "workload_id": "wl-srv6-push",
+    "endpoints": [
+      {"id": "0000.0000.0001"},
+      {"id": "0000.0000.0002"}
+    ]
+  }' | python3 -c "
+import sys, json
+d = json.load(sys.stdin)
+for p in d['paths']:
+    print(f'{p[\"src_id\"]} -> {p[\"dst_id\"]}  sids={p[\"segment_list\"][\"sids\"]}')
+"
+# Expected:
+# 0000.0000.0001 -> 0000.0000.0002  sids=['fc00:0:1:e001:2::']   (uA packed)
+# 0000.0000.0002 -> 0000.0000.0001  sids=['fc00:0:2:e001:1::']
+
+# Cleanup
+curl -s -X POST http://$NODE:30080/paths/wl-srv6-push/complete \
+  -H 'Content-Type: application/json' -d '{"immediate":true}'
+curl -s -X DELETE http://$NODE:30080/topology/test-srv6
 ```
