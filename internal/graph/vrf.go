@@ -1,6 +1,6 @@
 package graph
 
-import "github.com/jalapeno/scoville/internal/srv6"
+import "github.com/jalapeno/syd/internal/srv6"
 
 // VRF is a vertex representing a VRF (Virtual Routing and Forwarding) instance
 // on a specific node. The (OwnerNodeID, Name) pair uniquely identifies a VRF

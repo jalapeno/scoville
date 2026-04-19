@@ -1,8 +1,8 @@
 1. On the k8s node — clone and deploy NATS first
 
 
-git clone git@github.com:jalapeno/scoville.git
-cd scoville
+git clone git@github.com:jalapeno/syd.git
+cd syd
 
 kubectl apply -f deploy/k8s/nats.yaml
 
@@ -26,19 +26,19 @@ kubectl -n jalapeno rollout status deployment/gobmp
 kubectl -n jalapeno logs -f deployment/gobmp
 In the logs you should see GoBMP connecting to NATS and publishing on gobmp.parsed.* subjects once your BMP sources are pointed at it.
 
-3. Build and deploy scoville
+3. Build and deploy syd
 
 You'll need to build the image on the node (or on your Mac and load it):
 
 
 # On the k8s node, from the repo root:
-docker build -t scoville:latest .
+docker build -t syd:latest .
 
 # For k3s:
-docker save scoville:latest | sudo k3s ctr images import -
+docker save syd:latest | sudo k3s ctr images import -
 
 # For kind:
-kind load docker-image scoville:latest
+kind load docker-image syd:latest
 Then:
 
 
@@ -47,18 +47,18 @@ Then:
 # (the default in configmap.yaml is already set to that)
 
 kubectl apply -k deploy/k8s/
-kubectl -n scoville rollout status deployment/scoville
-kubectl -n scoville logs -f deployment/scoville
+kubectl -n syd rollout status deployment/syd
+kubectl -n syd logs -f deployment/syd
 You should see:
 
 
 level=INFO msg="bmp collector configured" nats_url=nats://nats.jalapeno:4222
-level=INFO msg="scoville starting" addr=:8080 bmp=true encap_mode=host
+level=INFO msg="syd starting" addr=:8080 bmp=true encap_mode=host
 Once the containerlab BMP streams are flowing, the topology will start populating and you can hit curl http://<node-ip>:30080/topology from your laptop.
 
 ### BMP
 
-cisco@jalapeno-host:~/scoville$ curl -s http://localhost:30080/topology/underlay/nodes | python3 -m json.tool | grep name
+cisco@jalapeno-host:~/syd$ curl -s http://localhost:30080/topology/underlay/nodes | python3 -m json.tool | grep name
             "name": "xrd01"
             "name": "xrd15"
             "name": "xrd25"
@@ -76,7 +76,7 @@ cisco@jalapeno-host:~/scoville$ curl -s http://localhost:30080/topology/underlay
             "name": "xrd03"
             "name": "xrd16"
             "name": "xrd04"
-cisco@jalapeno-host:~/scoville$ curl -s -X POST http://localhost:30080/paths/request   -H 'Content-Type: application/json'   -d '{
+cisco@jalapeno-host:~/syd$ curl -s -X POST http://localhost:30080/paths/request   -H 'Content-Type: application/json'   -d '{
     "topology_id": "underlay",
     "workload_id": "test-xrd01-xrd28",
     "endpoints": [
@@ -135,7 +135,7 @@ cisco@jalapeno-host:~/scoville$ curl -s -X POST http://localhost:30080/paths/req
         "total_free_after": 0
     }
 }
-cisco@jalapeno-host:~/scoville$ curl -s http://localhost:30080/paths/test-xrd01-xrd28/flows | python3 -m json.tool
+cisco@jalapeno-host:~/syd$ curl -s http://localhost:30080/paths/test-xrd01-xrd28/flows | python3 -m json.tool
 {
     "workload_id": "test-xrd01-xrd28",
     "topology_id": "underlay",
@@ -336,11 +336,11 @@ for line in sys.stdin:
         print(m.get('igp_router_id'), m.get('srv6_sid'), 'behavior:', hex(m.get('srv6_endpoint_behavior', {}).get('endpoint_behavior', 0)))
     except: pass"
 
-# Delete stale consumers manually (scoville does this on startup, but useful for debugging)
-nats -s nats://localhost:4222 consumer rm goBMP scoville-gobmp-parsed-ls_node
-nats -s nats://localhost:4222 consumer rm goBMP scoville-gobmp-parsed-ls_link
-nats -s nats://localhost:4222 consumer rm goBMP scoville-gobmp-parsed-ls_srv6_sid
-nats -s nats://localhost:4222 consumer rm goBMP scoville-gobmp-parsed-peer
+# Delete stale consumers manually (syd does this on startup, but useful for debugging)
+nats -s nats://localhost:4222 consumer rm goBMP syd-gobmp-parsed-ls_node
+nats -s nats://localhost:4222 consumer rm goBMP syd-gobmp-parsed-ls_link
+nats -s nats://localhost:4222 consumer rm goBMP syd-gobmp-parsed-ls_srv6_sid
+nats -s nats://localhost:4222 consumer rm goBMP syd-gobmp-parsed-peer
 ```
 
 ---

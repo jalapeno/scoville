@@ -9,6 +9,6 @@ resources:
 
 # Override the image tag here for each environment, e.g.:
 # images:
-#   - name: scoville
-#     newName: ghcr.io/jalapeno/scoville
+#   - name: syd
+#     newName: ghcr.io/jalapeno/syd
 #     newTag: "0.1.0"

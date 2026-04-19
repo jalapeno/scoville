@@ -4,10 +4,10 @@ import (
 	"fmt"
 	"net/http"
 
-	"github.com/jalapeno/scoville/internal/allocation"
-	"github.com/jalapeno/scoville/internal/graph"
-	"github.com/jalapeno/scoville/internal/topology"
-	"github.com/jalapeno/scoville/pkg/apitypes"
+	"github.com/jalapeno/syd/internal/allocation"
+	"github.com/jalapeno/syd/internal/graph"
+	"github.com/jalapeno/syd/internal/topology"
+	"github.com/jalapeno/syd/pkg/apitypes"
 )
 
 func (s *Server) handleTopologyPush(w http.ResponseWriter, r *http.Request) {

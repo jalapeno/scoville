@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jalapeno/scoville/internal/graph"
+	"github.com/jalapeno/syd/internal/graph"
 )
 
 // minimalDoc is a small but complete topology document used as the baseline

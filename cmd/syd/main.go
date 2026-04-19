@@ -1,9 +1,9 @@
-// Command scoville is the SR Network Controller — an SDN control plane for
+// Command syd is the SR Network Controller — an SDN control plane for
 // SRv6-based path programming in AI fabrics and other use cases.
 //
 // Usage:
 //
-//	scoville [flags]
+//	syd [flags]
 //
 // Flags:
 //
@@ -11,7 +11,7 @@
 //
 //	--bmp               Enable the BMP/GoBMP NATS collector
 //	--nats-url          NATS server URL (default: "nats://localhost:4222")
-//	--bmp-consumer      Durable JetStream consumer name prefix (default: "scoville")
+//	--bmp-consumer      Durable JetStream consumer name prefix (default: "syd")
 //	--bmp-topo          Topology ID for BMP-learned underlay graph (default: "underlay")
 //
 //	--encap-mode        Southbound encap mode: "host" (default) or "tor"
@@ -33,20 +33,20 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/jalapeno/scoville/internal/allocation"
-	"github.com/jalapeno/scoville/internal/api"
-	"github.com/jalapeno/scoville/internal/bmpcollector"
-	"github.com/jalapeno/scoville/internal/graph"
-	"github.com/jalapeno/scoville/internal/southbound"
-	"github.com/jalapeno/scoville/internal/southbound/gnmi"
-	"github.com/jalapeno/scoville/internal/southbound/noop"
+	"github.com/jalapeno/syd/internal/allocation"
+	"github.com/jalapeno/syd/internal/api"
+	"github.com/jalapeno/syd/internal/bmpcollector"
+	"github.com/jalapeno/syd/internal/graph"
+	"github.com/jalapeno/syd/internal/southbound"
+	"github.com/jalapeno/syd/internal/southbound/gnmi"
+	"github.com/jalapeno/syd/internal/southbound/noop"
 )
 
 func main() {
 	addr        := flag.String("addr",         ":8080",                  "HTTP listen address")
 	bmpEnabled  := flag.Bool("bmp",            false,                    "Enable BMP/GoBMP NATS collector")
 	natsURL     := flag.String("nats-url",     "nats://localhost:4222",  "NATS server URL")
-	bmpConsumer := flag.String("bmp-consumer", "scoville",                   "Durable JetStream consumer name prefix")
+	bmpConsumer := flag.String("bmp-consumer", "syd",                        "Durable JetStream consumer name prefix")
 	bmpTopo     := flag.String("bmp-topo",     "underlay",               "Topology ID for BMP-learned underlay graph")
 	encapMode   := flag.String("encap-mode",   "host",                   "Southbound encap mode: host or tor")
 	targetMap   := flag.String("gnmi-target-map", "",                    "nodeID=host:port,... for gNMI target resolution")
@@ -122,7 +122,7 @@ func main() {
 	// --- HTTP API server -----------------------------------------------------
 	srv := api.NewWithDriver(store, tables, driver, log)
 
-	log.Info("scoville starting",
+	log.Info("syd starting",
 		"addr", *addr,
 		"bmp", *bmpEnabled,
 		"encap_mode", *encapMode,

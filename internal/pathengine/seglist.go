@@ -3,8 +3,8 @@ package pathengine
 import (
 	"fmt"
 
-	"github.com/jalapeno/scoville/internal/graph"
-	"github.com/jalapeno/scoville/internal/srv6"
+	"github.com/jalapeno/syd/internal/graph"
+	"github.com/jalapeno/syd/internal/srv6"
 )
 
 // BuildSegmentList constructs an SRv6 segment list for the given SPFResult.

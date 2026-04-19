@@ -37,8 +37,8 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/jalapeno/scoville/internal/graph"
-	"github.com/jalapeno/scoville/internal/southbound"
+	"github.com/jalapeno/syd/internal/graph"
+	"github.com/jalapeno/syd/internal/southbound"
 )
 
 // GNMIClient is the minimal interface the driver needs from a gNMI transport.

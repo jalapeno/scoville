@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"math"
 
-	"github.com/jalapeno/scoville/internal/graph"
+	"github.com/jalapeno/syd/internal/graph"
 )
 
 // SPFResult holds the output of a single shortest-path computation.

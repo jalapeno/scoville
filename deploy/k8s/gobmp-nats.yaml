@@ -5,7 +5,7 @@
 #
 # Routers must send BMP to BOTH NodePorts:
 #   port 30511 → gobmp (Kafka, existing)
-#   port 30512 → gobmp-nats (NATS, for scoville)
+#   port 30512 → gobmp-nats (NATS, for syd)
 apiVersion: v1
 kind: Service
 metadata:

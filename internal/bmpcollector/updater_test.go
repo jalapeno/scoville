@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/jalapeno/scoville/internal/graph"
-	"github.com/jalapeno/scoville/internal/srv6"
+	"github.com/jalapeno/syd/internal/graph"
+	"github.com/jalapeno/syd/internal/srv6"
 )
 
 // newStore returns a fresh graph.Store with a single empty graph named "test".

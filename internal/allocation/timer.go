@@ -5,7 +5,7 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/jalapeno/scoville/internal/graph"
+	"github.com/jalapeno/syd/internal/graph"
 )
 
 // DrainGracePeriod is the time a workload spends in DRAINING state before its

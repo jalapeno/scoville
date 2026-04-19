@@ -6,7 +6,7 @@ import (
 
 	gobmpmsg "github.com/sbezverk/gobmp/pkg/message"
 	gobmpsrv6 "github.com/sbezverk/gobmp/pkg/srv6"
-	"github.com/jalapeno/scoville/internal/srv6"
+	"github.com/jalapeno/syd/internal/srv6"
 )
 
 // --- ID helper tests ---------------------------------------------------------

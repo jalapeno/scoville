@@ -5,8 +5,8 @@ import (
 	"net/netip"
 	"strings"
 
-	"github.com/jalapeno/scoville/internal/graph"
-	"github.com/jalapeno/scoville/pkg/apitypes"
+	"github.com/jalapeno/syd/internal/graph"
+	"github.com/jalapeno/syd/pkg/apitypes"
 )
 
 // ResolvedEndpoint pairs an EndpointSpec with the Node vertex ID that the path

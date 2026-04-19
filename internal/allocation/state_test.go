@@ -3,7 +3,7 @@ package allocation
 import (
 	"testing"
 
-	"github.com/jalapeno/scoville/internal/graph"
+	"github.com/jalapeno/syd/internal/graph"
 )
 
 // --- helpers -----------------------------------------------------------------

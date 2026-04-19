@@ -1,16 +1,16 @@
 ---
-# ClusterIP: scoville API reachable by other pods in the cluster
+# ClusterIP: syd API reachable by other pods in the cluster
 # (simulated scheduler, future UI pod, etc.)
 apiVersion: v1
 kind: Service
 metadata:
-  name: scoville
-  namespace: scoville
+  name: syd
+  namespace: syd
   labels:
-    app: scoville
+    app: syd
 spec:
   selector:
-    app: scoville
+    app: syd
   ports:
     - name: http
       port: 8080
@@ -25,13 +25,13 @@ spec:
 apiVersion: v1
 kind: Service
 metadata:
-  name: scoville-external
-  namespace: scoville
+  name: syd-external
+  namespace: syd
   labels:
-    app: scoville
+    app: syd
 spec:
   selector:
-    app: scoville
+    app: syd
   ports:
     - name: http
       port: 8080

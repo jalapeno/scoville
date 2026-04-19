@@ -3,7 +3,7 @@ package allocation
 import (
 	"sync"
 
-	"github.com/jalapeno/scoville/internal/graph"
+	"github.com/jalapeno/syd/internal/graph"
 )
 
 // TableSet is a goroutine-safe registry of allocation Tables keyed by topology

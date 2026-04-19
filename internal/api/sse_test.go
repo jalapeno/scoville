@@ -8,9 +8,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jalapeno/scoville/internal/allocation"
-	"github.com/jalapeno/scoville/internal/graph"
-	"github.com/jalapeno/scoville/pkg/apitypes"
+	"github.com/jalapeno/syd/internal/allocation"
+	"github.com/jalapeno/syd/internal/graph"
+	"github.com/jalapeno/syd/pkg/apitypes"
 )
 
 // readSSEEvent reads the next SSE event from a bufio.Scanner that is scanning

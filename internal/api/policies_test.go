@@ -5,7 +5,7 @@ import (
 	"net/http"
 	"testing"
 
-	"github.com/jalapeno/scoville/pkg/apitypes"
+	"github.com/jalapeno/syd/pkg/apitypes"
 )
 
 // --- POST /topology/{id}/policies --------------------------------------------

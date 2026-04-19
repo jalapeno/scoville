@@ -46,7 +46,7 @@ func sonicPolicyName(pathID string) string {
 			b.WriteRune('_')
 		}
 	}
-	return "scoville_" + b.String()
+	return "syd_" + b.String()
 }
 
 // sonicSIDListVal is the JSON value written to SRV6_SID_LIST.

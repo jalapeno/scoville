@@ -6,10 +6,10 @@ import (
 	"net/http"
 	"testing"
 
-	"github.com/jalapeno/scoville/internal/allocation"
-	"github.com/jalapeno/scoville/internal/graph"
-	"github.com/jalapeno/scoville/internal/srv6"
-	"github.com/jalapeno/scoville/pkg/apitypes"
+	"github.com/jalapeno/syd/internal/allocation"
+	"github.com/jalapeno/syd/internal/graph"
+	"github.com/jalapeno/syd/internal/srv6"
+	"github.com/jalapeno/syd/pkg/apitypes"
 )
 
 // seedAllocatedPath registers a path with the given SIDs and allocates it to

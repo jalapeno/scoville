@@ -3,8 +3,8 @@ package pathengine
 import (
 	"testing"
 
-	"github.com/jalapeno/scoville/internal/graph"
-	"github.com/jalapeno/scoville/pkg/apitypes"
+	"github.com/jalapeno/syd/internal/graph"
+	"github.com/jalapeno/syd/pkg/apitypes"
 )
 
 // makeResolveGraph builds a minimal graph for endpoint resolution tests:

@@ -1,6 +1,6 @@
-# scoville Simulated AI Workload Scheduler
+# syd Simulated AI Workload Scheduler
 
-A Python scheduler that drives scoville through realistic job lifecycles —
+A Python scheduler that drives syd through realistic job lifecycles —
 no GPUs, no NCCL, no hardware required.
 
 Uses only Python stdlib (no pip installs needed).
@@ -10,7 +10,7 @@ Uses only Python stdlib (no pip installs needed).
 ## What it simulates
 
 ```
-scheduler.py          scoville
+scheduler.py          syd
 ─────────────         ────────────────────────────────────────────────
 POST /paths/request ─→ allocate SRv6 paths, return packed uSID containers
 GET  /paths/.../flows ─→ retrieve outer_da per flow ("program the route")
@@ -27,11 +27,11 @@ communicator or PyTorch plugin would do.
 
 ## Quick start
 
-### 1. Start scoville (from repo root)
+### 1. Start syd (from repo root)
 
 ```bash
-go build -o scoville ./cmd/scoville
-./scoville --addr :8080
+go build -o syd ./cmd/syd
+./syd --addr :8080
 ```
 
 ### 2. Run the basic scenario (push topology + one 15s job)
@@ -78,16 +78,16 @@ Expected output:
 ```bash
 # Port-forward or use the NodePort (30080).
 python3 examples/scheduler-sim/scheduler.py \
-  --scoville http://<node-ip>:30080 \
+  --syd http://<node-ip>:30080 \
   --scenario concurrent
 ```
 
-If scoville is already connected to BMP and has learned a live topology, skip
+If syd is already connected to BMP and has learned a live topology, skip
 `--topology-file` and just set `--topology underlay`:
 
 ```bash
 python3 examples/scheduler-sim/scheduler.py \
-  --scoville http://<node-ip>:30080 \
+  --syd http://<node-ip>:30080 \
   --topology underlay \
   --endpoints <node-id-1>,<node-id-2> \
   --scenario basic

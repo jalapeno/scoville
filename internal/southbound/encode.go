@@ -3,8 +3,8 @@ package southbound
 import (
 	"net/netip"
 
-	"github.com/jalapeno/scoville/internal/graph"
-	"github.com/jalapeno/scoville/internal/srv6"
+	"github.com/jalapeno/syd/internal/graph"
+	"github.com/jalapeno/syd/internal/srv6"
 )
 
 // EncodeFlows converts graph.Path objects into EncodedFlow records for

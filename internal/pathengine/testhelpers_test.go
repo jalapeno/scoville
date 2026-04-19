@@ -3,8 +3,8 @@ package pathengine
 import (
 	"testing"
 
-	"github.com/jalapeno/scoville/internal/graph"
-	"github.com/jalapeno/scoville/internal/srv6"
+	"github.com/jalapeno/syd/internal/graph"
+	"github.com/jalapeno/syd/internal/srv6"
 )
 
 // f3216 is the F3216 uSID structure for uA SIDs (funcLen=16).

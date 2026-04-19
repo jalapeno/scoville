@@ -6,7 +6,7 @@ import (
 	"sort"
 	"sync"
 
-	"github.com/jalapeno/scoville/pkg/apitypes"
+	"github.com/jalapeno/syd/pkg/apitypes"
 )
 
 // policyStore holds per-topology name→algo_id mappings, guarded by a

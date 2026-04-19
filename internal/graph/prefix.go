@@ -1,6 +1,6 @@
 package graph
 
-import "github.com/jalapeno/scoville/internal/srv6"
+import "github.com/jalapeno/syd/internal/srv6"
 
 // PrefixType classifies how a prefix is used in the network.
 type PrefixType string

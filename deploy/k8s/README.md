@@ -1,17 +1,17 @@
-# scoville Kubernetes Deployment
+# syd Kubernetes Deployment
 
-Deploys scoville alongside an existing GoBMP + NATS stack.
+Deploys syd alongside an existing GoBMP + NATS stack.
 
 ## Architecture
 
 ```
 containerlab (XRd / FRR)
   └─ BMP/TCP ──→ GoBMP pod (your existing pod)
-                   └─ NATS JetStream ──→ scoville pod  ←── scheduler / UI
-                                          (namespace: scoville)
+                   └─ NATS JetStream ──→ syd pod  ←── scheduler / UI
+                                          (namespace: syd)
 ```
 
-scoville does **not** open a BMP port. It only connects **out** to NATS and
+syd does **not** open a BMP port. It only connects **out** to NATS and
 listens on HTTP :8080.
 
 ---
@@ -31,10 +31,10 @@ From the repo root:
 
 ```bash
 # Build (adjust tag and registry as needed)
-docker build -t ghcr.io/jalapeno/scoville:latest .
+docker build -t ghcr.io/jalapeno/syd:latest .
 
 # Push to your registry
-docker push ghcr.io/jalapeno/scoville:latest
+docker push ghcr.io/jalapeno/syd:latest
 ```
 
 > **Note on the gobmp replace directive**: `go.mod` uses
@@ -46,10 +46,10 @@ For a quick local test without a registry, load directly into the cluster:
 
 ```bash
 # kind
-kind load docker-image scoville:latest
+kind load docker-image syd:latest
 
 # k3s / containerd
-docker save scoville:latest | ssh <node> "sudo k3s ctr images import -"
+docker save syd:latest | ssh <node> "sudo k3s ctr images import -"
 ```
 
 ---
@@ -84,13 +84,13 @@ kubectl apply -k deploy/k8s/
 Verify:
 
 ```bash
-kubectl -n scoville get pods
+kubectl -n syd get pods
 # NAME                   READY   STATUS    RESTARTS   AGE
-# scoville-xxx               1/1     Running   0          30s
+# syd-xxx               1/1     Running   0          30s
 
-kubectl -n scoville logs -f deployment/scoville
+kubectl -n syd logs -f deployment/syd
 # time=... level=INFO msg="bmp collector configured" nats_url=... topo_id=underlay
-# time=... level=INFO msg="scoville starting" addr=:8080 bmp=true encap_mode=host
+# time=... level=INFO msg="syd starting" addr=:8080 bmp=true encap_mode=host
 ```
 
 ---
@@ -100,7 +100,7 @@ kubectl -n scoville logs -f deployment/scoville
 **From inside the cluster** (other pods, e.g. the scheduler sim):
 
 ```
-http://scoville.scoville.svc.cluster.local:8080
+http://syd.syd.svc.cluster.local:8080
 ```
 
 **From your laptop / containerlab VM** (NodePort):
@@ -115,7 +115,7 @@ curl http://<node-ip>:30080/topology
 Or use port-forward for one-off testing:
 
 ```bash
-kubectl -n scoville port-forward deployment/scoville 8080:8080
+kubectl -n syd port-forward deployment/syd 8080:8080
 curl http://localhost:8080/topology
 ```
 
@@ -123,11 +123,11 @@ curl http://localhost:8080/topology
 
 ## 5. Check BMP topology ingestion
 
-Once your containerlab nodes are sending BMP to GoBMP, scoville will start
+Once your containerlab nodes are sending BMP to GoBMP, syd will start
 building the underlay topology. Watch the log:
 
 ```bash
-kubectl -n scoville logs -f deployment/scoville | grep -E "topology|workload|bmp"
+kubectl -n syd logs -f deployment/syd | grep -E "topology|workload|bmp"
 ```
 
 Then query the topology:
@@ -142,12 +142,12 @@ curl http://<node-ip>:30080/topology/underlay
 
 ---
 
-## 6. Run the simulated scheduler against k8s scoville
+## 6. Run the simulated scheduler against k8s syd
 
 ```bash
 # From your laptop with port-forward running:
 python3 examples/scheduler-sim/scheduler.py \
-  --scoville http://localhost:8080 \
+  --syd http://localhost:8080 \
   --topology underlay \
   --endpoints <node-id-from-bmp>,<another-node-id> \
   --scenario basic
@@ -166,8 +166,8 @@ curl http://localhost:8080/topology/underlay | python3 -c \
 
 ```bash
 # After rebuilding the image:
-kubectl -n scoville rollout restart deployment/scoville
-kubectl -n scoville rollout status deployment/scoville
+kubectl -n syd rollout restart deployment/syd
+kubectl -n syd rollout status deployment/syd
 ```
 
 ## Teardown

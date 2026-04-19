@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jalapeno/scoville/internal/graph"
+	"github.com/jalapeno/syd/internal/graph"
 )
 
 // allocateWithLease is a test helper that registers a path, creates a workload

@@ -13,8 +13,8 @@ COPY . .
 RUN CGO_ENABLED=0 GOOS=linux go build \
       -trimpath \
       -ldflags="-s -w" \
-      -o /out/scoville \
-      ./cmd/scoville
+      -o /out/syd \
+      ./cmd/syd
 
 # --- runtime stage -----------------------------------------------------------
 FROM scratch
@@ -22,10 +22,10 @@ FROM scratch
 # TLS root CAs are needed for NATS TLS and any outbound HTTPS calls.
 COPY --from=build /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
 
-COPY --from=build /out/scoville /scoville
+COPY --from=build /out/syd /syd
 
 # Default HTTP API port.
 EXPOSE 8080
 
-ENTRYPOINT ["/scoville"]
+ENTRYPOINT ["/syd"]
 CMD ["--addr", ":8080"]

@@ -1,6 +1,6 @@
 package graph
 
-import "github.com/jalapeno/scoville/internal/srv6"
+import "github.com/jalapeno/syd/internal/srv6"
 
 // DisjointnessLevel specifies how isolated an allocated path must be from
 // other allocated paths.

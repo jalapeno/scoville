@@ -1,4 +1,4 @@
-module github.com/jalapeno/scoville
+module github.com/jalapeno/syd
 
 go 1.26.2
 

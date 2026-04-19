@@ -1,4 +1,4 @@
-// Package srv6 defines SRv6 data types used throughout scoville.
+// Package srv6 defines SRv6 data types used throughout syd.
 // Naming follows RFC 8986 (SRv6 Network Programming) and the micro-segment
 // (uSID) draft where applicable.
 package srv6

@@ -1,11 +1,11 @@
 // Package apitypes defines the public HTTP API request and response types for
-// scoville. These are the structures callers (AI schedulers, PyTorch jobs, network
+// syd. These are the structures callers (AI schedulers, PyTorch jobs, network
 // operators) use to interact with the controller. They are kept in a separate
 // package so that external programs can import them without pulling in internal
 // dependencies.
 package apitypes
 
-import "github.com/jalapeno/scoville/internal/srv6"
+import "github.com/jalapeno/syd/internal/srv6"
 
 // --- Topology API ---------------------------------------------------------
 

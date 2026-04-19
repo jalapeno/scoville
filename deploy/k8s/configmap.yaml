@@ -1,8 +1,8 @@
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: scoville-config
-  namespace: scoville
+  name: syd-config
+  namespace: syd
 data:
   # NATS URL — must match the service name and namespace where NATS is deployed.
   # NATS is in the jalapeno namespace alongside GoBMP.
@@ -12,7 +12,7 @@ data:
   BMP_TOPO: "underlay"
 
   # JetStream durable consumer name prefix.
-  BMP_CONSUMER: "scoville"
+  BMP_CONSUMER: "syd"
 
   # Southbound encap mode. "host" = no-op (pull via /flows). "tor" = gNMI push.
   ENCAP_MODE: "host"

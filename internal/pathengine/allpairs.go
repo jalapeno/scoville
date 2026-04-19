@@ -3,7 +3,7 @@ package pathengine
 import (
 	"fmt"
 
-	"github.com/jalapeno/scoville/internal/graph"
+	"github.com/jalapeno/syd/internal/graph"
 )
 
 // PairingMode controls how directed pairs are enumerated and how disjointness

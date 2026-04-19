@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-scoville Simulated AI Workload Scheduler
+syd Simulated AI Workload Scheduler
 =====================================
-Simulates the lifecycle of AI training jobs interacting with scoville.
+Simulates the lifecycle of AI training jobs interacting with syd.
 
 Each job:
   1. Calls POST /paths/request to get SRv6 segment lists.
@@ -51,7 +51,7 @@ class JobSpec:
 # HTTP helpers (stdlib-only, no external deps)
 # ---------------------------------------------------------------------------
 
-class ScovilleClient:
+class SydClient:
     def __init__(self, base_url: str, timeout: int = 10):
         self.base = base_url.rstrip("/")
         self.timeout = timeout
@@ -136,7 +136,7 @@ class ScovilleClient:
 # ---------------------------------------------------------------------------
 
 class JobRunner:
-    def __init__(self, client: ScovilleClient, spec: JobSpec):
+    def __init__(self, client: SydClient, spec: JobSpec):
         self.client = client
         self.spec = spec
         self._stop = threading.Event()
@@ -269,7 +269,7 @@ SCENARIOS = {
     "basic": "Single job, 15s, no lease — validates the core request/complete loop",
     "lease": "Single job, 20s, 10s lease — exercises heartbeat extension",
     "concurrent": "Four jobs at once, exclusive node-disjoint paths, 30s — stress-tests allocation",
-    "drain": "One job that runs forever until you manually invalidate an element via scoville API",
+    "drain": "One job that runs forever until you manually invalidate an element via syd API",
 }
 
 def make_jobs_basic(topo: str, endpoints: list[str]) -> list[JobSpec]:
@@ -313,12 +313,12 @@ def make_jobs_drain(topo: str, endpoints: list[str]) -> list[JobSpec]:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="scoville simulated AI workload scheduler",
+        description="syd simulated AI workload scheduler",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="\n".join(f"  {k:12s}  {v}" for k, v in SCENARIOS.items()),
     )
-    parser.add_argument("--scoville", default="http://localhost:8080",
-                        help="scoville base URL (default: http://localhost:8080)")
+    parser.add_argument("--syd", default="http://localhost:8080",
+                        help="syd base URL (default: http://localhost:8080)")
     parser.add_argument("--topology", default="ai-fabric",
                         help="Topology ID to use for path requests")
     parser.add_argument("--topology-file", default="",
@@ -338,7 +338,7 @@ def main() -> None:
         datefmt="%H:%M:%S",
     )
 
-    client = ScovilleClient(args.scoville)
+    client = SydClient(args.syd)
     endpoints = [e.strip() for e in args.endpoints.split(",")]
 
     # Optionally push a topology first.
@@ -363,7 +363,7 @@ def main() -> None:
     }
     jobs = builders[args.scenario](args.topology, endpoints)
 
-    log.info("scenario=%s  jobs=%d  scoville=%s", args.scenario, len(jobs), args.scoville)
+    log.info("scenario=%s  jobs=%d  syd=%s", args.scenario, len(jobs), args.syd)
 
     if len(jobs) == 1:
         JobRunner(client, jobs[0]).run()

@@ -1,13 +1,13 @@
-# Scoville — SR Network Controller
+# Syd — SR Network Controller
 
 ## Project overview
 
-Scoville is an SRv6 SDN control plane for AI fabric path pinning and general
+Syd is an SRv6 SDN control plane for AI fabric path pinning and general
 traffic engineering. An AI job scheduler (or any caller) POSTs a list of
-endpoint pairs; scoville returns SRv6 segment lists that pin traffic to
+endpoint pairs; syd returns SRv6 segment lists that pin traffic to
 specific paths, bypassing ECMP.
 
-Module path: `github.com/jalapeno/scoville`
+Module path: `github.com/jalapeno/syd`
 Local clone:  `~/src/newproject/`
 
 ## Architecture
@@ -41,7 +41,7 @@ Local clone:  `~/src/newproject/`
 
 | Package | Purpose |
 |---------|---------|
-| `cmd/scoville` | Binary entry point; flag parsing; wires everything together |
+| `cmd/syd` | Binary entry point; flag parsing; wires everything together |
 | `internal/graph` | Typed property graph: Node, Interface, Endpoint, VRF, LinkEdge, etc. `graph.Store` holds multiple named graphs |
 | `internal/srv6` | SID types, `TryPackUSID` (uSID container packing), segment list types |
 | `internal/topology` | JSON topology document parser/builder for the push API |
@@ -191,10 +191,10 @@ stub vertex tests) — tracked as a roadmap item, unrelated to recent changes.
 
 Kubernetes deployment:
 ```bash
-docker build -t scoville:latest .
-docker save scoville:latest | sudo k3s ctr images import -
+docker build -t syd:latest .
+docker save syd:latest | sudo k3s ctr images import -
 kubectl apply -k deploy/k8s/
-kubectl -n scoville rollout status deployment/scoville
+kubectl -n syd rollout status deployment/syd
 ```
 
 NodePort: `http://<node-ip>:30080`

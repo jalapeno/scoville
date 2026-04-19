@@ -1,6 +1,6 @@
 package graph
 
-import "github.com/jalapeno/scoville/internal/srv6"
+import "github.com/jalapeno/syd/internal/srv6"
 
 // Interface is a first-class vertex representing a physical or logical port on
 // a Node. Modeling interfaces as vertices (rather than Node attributes) is

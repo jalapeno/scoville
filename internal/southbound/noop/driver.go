@@ -6,7 +6,7 @@ package noop
 import (
 	"context"
 
-	"github.com/jalapeno/scoville/internal/southbound"
+	"github.com/jalapeno/syd/internal/southbound"
 )
 
 // Driver is the no-op southbound driver. All operations succeed immediately.

@@ -3,7 +3,7 @@ package pathengine
 import (
 	"math"
 
-	"github.com/jalapeno/scoville/internal/graph"
+	"github.com/jalapeno/syd/internal/graph"
 )
 
 // MetricType selects which edge attribute is used as the Dijkstra cost.

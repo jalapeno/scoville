@@ -1,4 +1,4 @@
-// Package graph implements the in-memory typed property graph used by scoville.
+// Package graph implements the in-memory typed property graph used by syd.
 //
 // The graph models a network topology as a set of vertices and edges.
 // Vertices represent network elements (nodes, interfaces, endpoints, prefixes,

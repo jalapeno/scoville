@@ -1,4 +1,4 @@
-# scoville — AI Fabric Quick-Start Example
+# syd — AI Fabric Quick-Start Example
 
 This example walks through a complete lifecycle against a small 2-tier BGP-only
 fabric: push a topology, request SRv6 paths for a GPU workload, retrieve the
@@ -20,7 +20,7 @@ packed uSID segment lists, and release the workload when training is done.
 - **SRv6 uSID F3216** — 32-bit block `fc00:0::/32`, 16-bit node, 16-bit function.
 - **Management IPs** for optional gNMI ToR-mode encap are in each node's
   `annotations.management_ip`. For BGP-only fabrics this is the correct way to
-  tell scoville where to reach each switch via gNMI — no IGP identity needed.
+  tell syd where to reach each switch via gNMI — no IGP identity needed.
 
 Node SIDs and uA SIDs:
 
@@ -40,25 +40,25 @@ Node SIDs and uA SIDs:
 
 ---
 
-## 1. Build scoville
+## 1. Build syd
 
 From the repository root:
 
 ```bash
-go build -o scoville ./cmd/scoville
+go build -o syd ./cmd/syd
 ```
 
 ---
 
-## 2. Start scoville
+## 2. Start syd
 
 ```bash
-./scoville --addr :8080
+./syd --addr :8080
 ```
 
 Expected output:
 ```
-time=... level=INFO msg="scoville starting" addr=:8080 bmp=false
+time=... level=INFO msg="syd starting" addr=:8080 bmp=false
 ```
 
 The server is now listening on `http://localhost:8080`. BMP is disabled by
@@ -320,14 +320,14 @@ curl -s -X POST http://localhost:8080/paths/train-job-002/heartbeat \
   -w "%{http_code}\n"
 # → 204
 
-# If the heartbeat stops, scoville automatically drains the workload after 60s.
+# If the heartbeat stops, syd automatically drains the workload after 60s.
 ```
 
 ---
 
 ## 10. ToR encap mode (gNMI push to SONiC)
 
-When the switch performs SRv6 encapsulation instead of the host, start scoville
+When the switch performs SRv6 encapsulation instead of the host, start syd
 with a southbound driver. This requires a gNMI client library wired at
 startup (see `internal/southbound/gnmi`). The topology already contains
 `management_ip` annotations for each switch — no extra configuration needed.
@@ -337,7 +337,7 @@ document (the graph is learned from the network, not pushed), use
 `--gnmi-target-map` at startup:
 
 ```bash
-./scoville \
+./syd \
   --addr :8080 \
   --bmp \
   --bmp-topo underlay \
@@ -362,5 +362,5 @@ cluster:
   covers all realistic 2-tier and 3-tier paths without an SRH.
 
 For a 4-tier (spine-superspine) fabric where paths could exceed 6 hops in
-theory, scoville falls back to H.Encaps with a full SRH automatically — the
+theory, syd falls back to H.Encaps with a full SRH automatically — the
 `srh_raw` field in the `/flows` response will be populated.

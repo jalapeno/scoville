@@ -1,6 +1,6 @@
 package graph
 
-import "github.com/jalapeno/scoville/internal/srv6"
+import "github.com/jalapeno/syd/internal/srv6"
 
 // NodeSubtype classifies what kind of network forwarding element a Node is.
 type NodeSubtype string

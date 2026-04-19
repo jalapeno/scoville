@@ -22,7 +22,7 @@ import (
 	"time"
 
 	"github.com/nats-io/nats.go"
-	"github.com/jalapeno/scoville/internal/graph"
+	"github.com/jalapeno/syd/internal/graph"
 )
 
 // GoBMP NATS subject constants. These mirror the hardcoded constants in
@@ -71,7 +71,7 @@ type Config struct {
 
 	// ConsumerName is the durable JetStream consumer prefix. Scoped per
 	// subject, so each subject gets an independent consumer position.
-	// Must be unique per scoville instance if multiple instances share the same
+	// Must be unique per syd instance if multiple instances share the same
 	// NATS server.
 	ConsumerName string
 }
@@ -116,7 +116,7 @@ func (c *Collector) Register(h MessageHandler) {
 // not yet available (GoBMP startup race).
 func (c *Collector) Start(ctx context.Context) error {
 	nc, err := nats.Connect(c.cfg.NATSUrl,
-		nats.Name("scoville-bmpcollector"),
+		nats.Name("syd-bmpcollector"),
 		nats.MaxReconnects(-1), // reconnect indefinitely
 		nats.ReconnectWait(2*time.Second),
 		nats.DisconnectErrHandler(func(_ *nats.Conn, err error) {
@@ -140,7 +140,7 @@ func (c *Collector) Start(ctx context.Context) error {
 
 	// Ensure the GoBMP JetStream stream exists. GoBMP creates it with
 	// FileStorage on its own startup, but our NATS deployment uses memory
-	// storage only. We create it here with MemoryStorage so scoville can
+	// storage only. We create it here with MemoryStorage so syd can
 	// subscribe even if GoBMP's stream creation failed. If GoBMP already
 	// created it, AddStream returns ErrStreamNameAlreadyInUse which we ignore.
 	if err := c.ensureStream(); err != nil {
@@ -217,7 +217,7 @@ func (c *Collector) Stop() {
 // consumers to replay current topology state on startup or reconnect.
 //
 // GoBMP creates the stream with InterestPolicy + FileStorage; we update it
-// here so that messages survive even when scoville restarts.
+// here so that messages survive even when syd restarts.
 func (c *Collector) ensureStream() error {
 	cfg := &nats.StreamConfig{
 		Name:      GoBMPStream,
@@ -229,7 +229,7 @@ func (c *Collector) ensureStream() error {
 	}
 	_, err := c.js.AddStream(cfg)
 	if errors.Is(err, nats.ErrStreamNameAlreadyInUse) {
-		// Stream already exists (created by GoBMP or a prior scoville run).
+		// Stream already exists (created by GoBMP or a prior syd run).
 		// Update it to LimitsPolicy so DeliverLastPerSubject works correctly.
 		_, err = c.js.UpdateStream(cfg)
 		if err != nil {
