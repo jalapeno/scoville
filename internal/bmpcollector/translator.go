@@ -76,8 +76,14 @@ func behaviorFromCode(code uint16) srv6.BehaviorType {
 		return srv6.BehaviorEndB6Encaps
 	case 0x0011: // 17 End.B6.Encaps.Red
 		return srv6.BehaviorEndB6EncapsRed
-	// uSID micro-segment behavior codes (implementation-specific, commonly
-	// 0x0041 = uN, 0x0042 = uA — kept here as reference; treat as End/End.X).
+	// uSID micro-segment behavior codes.
+	// IOS-XR uses 0x0030 = uN (node locator, no function bits) and
+	// 0x0039 = uA (micro-adjacency, 16-bit function). IANA registry uses
+	// 0x0041/0x0042 for the same roles — treat both sets as End/End.X.
+	case 0x0030:
+		return srv6.BehaviorEnd
+	case 0x0039:
+		return srv6.BehaviorEndX
 	case 0x0041:
 		return srv6.BehaviorEnd
 	case 0x0042:
