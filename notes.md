@@ -825,7 +825,8 @@ for topo in underlay underlay-v4 underlay-peers underlay-prefixes-v4 underlay-pr
   curl -s http://$NODE:30080/topology/$topo | python3 -c "
 import sys, json
 d = json.load(sys.stdin)
-print(f'  nodes={d[\"nodes\"]}  edges={d[\"total_edges\"]}  prefixes={d.get(\"prefixes\",0)}')
+s = d['stats']
+print(f'  nodes={s[\"nodes\"]}  edges={s[\"total_edges\"]}  prefixes={s.get(\"prefixes\",0)}')
 "
 done
 ```
@@ -923,3 +924,85 @@ curl -s -X POST http://$NODE:30080/paths/test-vertexids/complete \
 
 Expected: `vertex_ids` = IS-IS system IDs in hop order; `edge_ids` = `link:*` IDs.
 
+
+---
+
+## Session: Clos fabric push topology (UI development)
+
+The file `test-data/clos-fabric.json` contains a synthetic 4-spine 8-leaf
+Clos fabric with 64 GPU endpoints. Push it as a separate topology alongside
+the BMP underlay — they are completely isolated by `topology_id`.
+
+Topology structure:
+- 4 spine nodes (`spine-1..4`), labels: `tier=spine`
+- 8 leaf nodes (`leaf-01..08`), labels: `tier=leaf pod=1..4` (2 leaves/pod)
+- 64 GPU endpoints (`gpu-001..064`), labels: `tier=gpu leaf=leaf-XX slot=1..8`
+- 64 directed spine-leaf `igp_adjacency` edge pairs (400 Gbps, 1 µs, metric 1)
+- 64 directed `attachment` edges (GPU → leaf)
+
+### Push the fabric topology
+
+```bash
+NODE=<your-node-ip>
+
+# From the repo root (where test-data/ lives):
+curl -s -X POST http://$NODE:30080/topology \
+  -H 'Content-Type: application/json' \
+  -d @test-data/clos-fabric.json | python3 -m json.tool
+# Expected: {"topology_id": "clos-fabric", "nodes": 12, "endpoints": 64, ...}
+
+# Verify it appears alongside underlay in the list
+curl -s http://$NODE:30080/topology | python3 -m json.tool
+
+# Check graph stats
+curl -s http://$NODE:30080/topology/clos-fabric | python3 -m json.tool
+
+# Fetch graph JSON for UI visualization
+curl -s http://$NODE:30080/topology/clos-fabric/graph | python3 -c "
+import sys, json
+d = json.load(sys.stdin)
+print(f'nodes={len(d[\"nodes\"])}  links={len(d[\"links\"])}')
+# Show a sample of node IDs grouped by tier
+from collections import Counter
+tiers = Counter(n['name'].split('-')[0] for n in d['nodes'])
+print('tiers:', dict(tiers))
+"
+```
+
+### Request a path across the fabric
+
+Since the fabric has no SRv6 locators, segment_list will be empty — but the
+path topology (vertex_ids, edge_ids, hop count) will be computed correctly.
+
+```bash
+# gpu-001 (on leaf-01) → gpu-033 (on leaf-05) — crosses spine layer
+curl -s -X POST http://$NODE:30080/paths/request \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "topology_id": "clos-fabric",
+    "workload_id": "clos-test",
+    "endpoints": [
+      {"id": "gpu-001"},
+      {"id": "gpu-033"}
+    ],
+    "pairing_mode": "all_directed"
+  }' | python3 -c "
+import sys, json
+d = json.load(sys.stdin)
+for p in d['paths'][:4]:
+    print(f'{p[\"src_id\"]} -> {p[\"dst_id\"]}')
+    print(f'  hops: {p[\"metric\"][\"hop_count\"]}')
+    print(f'  path: {\" -> \".join(p.get(\"vertex_ids\",[]))}')
+"
+
+curl -s -X POST http://$NODE:30080/paths/clos-test/complete \
+  -H 'Content-Type: application/json' -d '{"immediate":true}'
+```
+
+Expected: 3-hop paths (leaf-01 → spine-N → leaf-05), with ECMP across all 4 spines.
+
+### Cleanup
+
+```bash
+curl -s -X DELETE http://$NODE:30080/topology/clos-fabric
+```
