@@ -12,12 +12,14 @@ import (
 type uiGraphNode struct {
 	ID   string `json:"id"`
 	Name string `json:"name,omitempty"`
+	Type string `json:"type,omitempty"`
 }
 
 type uiGraphLink struct {
 	ID        string `json:"id"`
 	Source    string `json:"source"`
 	Target    string `json:"target"`
+	Type      string `json:"type,omitempty"`
 	Metric    uint32 `json:"metric,omitempty"`
 	Bandwidth uint64 `json:"bandwidth,omitempty"`
 	Delay     uint32 `json:"delay,omitempty"`
@@ -36,12 +38,20 @@ func (s *Server) handleTopologyGraph(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Collect all Node vertices
-	nodeVerts := g.VerticesByType(graph.VTNode)
-	nodes := make([]uiGraphNode, 0, len(nodeVerts))
-	nodeIDs := make(map[string]struct{}, len(nodeVerts))
-	for _, v := range nodeVerts {
-		n := uiGraphNode{ID: v.GetID()}
+	// Collect all vertices except Interfaces (which are internal to links
+	// and clutter the visualization).
+	allVerts := g.AllVertices()
+	nodeIDs := make(map[string]struct{}, len(allVerts))
+	var nodes []uiGraphNode
+	for _, v := range allVerts {
+		vt := v.GetType()
+		if vt == graph.VTInterface {
+			continue // skip interfaces — they're internal to link modeling
+		}
+		n := uiGraphNode{
+			ID:   v.GetID(),
+			Type: string(vt),
+		}
 		if nd, ok := v.(*graph.Node); ok {
 			n.Name = nd.Name
 		}
@@ -49,18 +59,10 @@ func (s *Server) handleTopologyGraph(w http.ResponseWriter, r *http.Request) {
 		nodeIDs[v.GetID()] = struct{}{}
 	}
 
-	// Also include Endpoint vertices
-	epVerts := g.VerticesByType(graph.VTEndpoint)
-	for _, v := range epVerts {
-		nodes = append(nodes, uiGraphNode{ID: v.GetID()})
-		nodeIDs[v.GetID()] = struct{}{}
-	}
-
-	// Collect LinkEdge and AttachmentEdge as links
+	// Collect all edges where both endpoints are in our visible node set.
 	seen := make(map[string]struct{})
 	var links []uiGraphLink
 	for _, e := range g.AllEdges() {
-		// Only include edges where both ends are in our node set
 		src, dst := e.GetSrcID(), e.GetDstID()
 		if _, ok := nodeIDs[src]; !ok {
 			continue
@@ -69,7 +71,7 @@ func (s *Server) handleTopologyGraph(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 
-		// Deduplicate bidirectional link edges (keep one per pair)
+		// Deduplicate bidirectional edges (keep one per pair)
 		pairKey := src + "|" + dst
 		reversePairKey := dst + "|" + src
 		if _, ok := seen[pairKey]; ok {
@@ -84,6 +86,7 @@ func (s *Server) handleTopologyGraph(w http.ResponseWriter, r *http.Request) {
 			ID:     e.GetID(),
 			Source: src,
 			Target: dst,
+			Type:   string(e.GetType()),
 		}
 
 		switch le := e.(type) {

@@ -66,6 +66,18 @@ function generateDemoTopology(): TopologyGraph {
   return { nodes, links };
 }
 
+// Resolve visual tier from a D3 datum. Works outside the main render effect
+// by checking the node's attached type or falling back to name heuristics.
+function resolveTier(d: any): number {
+  if (d.type === 'prefix' || d.type === 'endpoint') return 2;
+  if (d.type === 'vrf') return 1;
+  const id: string = d.id || '';
+  if (id.includes('spine')) return 0;
+  if (id.includes('leaf')) return 1;
+  if (d.type === 'node') return 0;
+  return 0;
+}
+
 export default function TopologyCanvas({
   topologyId,
   selectedNodes,
@@ -141,12 +153,27 @@ export default function TopologyCanvas({
     const nodes: GraphNode[] = topology.nodes.map((n) => ({ ...n }));
     const links: GraphLink[] = topology.links.map((l) => ({ ...l }));
 
-    // Determine node tiers for layout
-    const getNodeTier = (id: string) => {
+    // Determine node visual tier based on vertex type and name heuristics.
+    // Tier 0 = core/spine (largest), Tier 1 = distribution/leaf, Tier 2 = access/endpoint/prefix
+    const getNodeTier = (node: GraphNode): number => {
+      const t = node.type || '';
+      if (t === 'prefix') return 2;
+      if (t === 'endpoint') return 2;
+      if (t === 'vrf') return 1;
+      // For "node" type, use name heuristics if available
+      const id = node.id;
       if (id.includes('spine')) return 0;
       if (id.includes('leaf')) return 1;
-      return 2; // endpoints
+      // Default: treat all router nodes as tier 0 (equal)
+      return 0;
     };
+
+    // Build a lookup for tier by id
+    const tierMap = new Map<string, number>();
+    for (const n of nodes) {
+      tierMap.set(n.id, getNodeTier(n));
+    }
+    const getTier = (id: string) => tierMap.get(id) ?? 0;
 
     // Force simulation
     const simulation = d3
@@ -157,8 +184,8 @@ export default function TopologyCanvas({
           .forceLink<GraphNode, GraphLink>(links)
           .id((d) => d.id)
           .distance((d) => {
-            const srcTier = getNodeTier(typeof d.source === 'string' ? d.source : d.source.id);
-            const tgtTier = getNodeTier(typeof d.target === 'string' ? d.target : d.target.id);
+            const srcTier = getTier(typeof d.source === 'string' ? d.source : d.source.id);
+            const tgtTier = getTier(typeof d.target === 'string' ? d.target : d.target.id);
             if (srcTier !== tgtTier) return 120;
             return 80;
           })
@@ -169,7 +196,7 @@ export default function TopologyCanvas({
       .force(
         'y',
         d3.forceY<GraphNode>((d) => {
-          const tier = getNodeTier(d.id);
+          const tier = getTier(d.id);
           return height * 0.2 + tier * (height * 0.3);
         }).strength(0.3)
       )
@@ -236,15 +263,15 @@ export default function TopologyCanvas({
     nodeGroup
       .append('circle')
       .attr('r', (d) => {
-        const tier = getNodeTier(d.id);
+        const tier = getTier(d.id);
         return tier === 0 ? 16 : tier === 1 ? 12 : 8;
       })
       .attr('fill', (d) => {
-        const tier = getNodeTier(d.id);
+        const tier = getTier(d.id);
         return tier === 0 ? '#0f4477' : tier === 1 ? '#0a3358' : '#061e38';
       })
       .attr('stroke', (d) => {
-        const tier = getNodeTier(d.id);
+        const tier = getTier(d.id);
         return tier === 0 ? '#68e8e8' : tier === 1 ? '#3fbfbf' : '#2a8a8a';
       })
       .attr('stroke-width', 2.5);
@@ -254,7 +281,7 @@ export default function TopologyCanvas({
       .append('text')
       .text((d) => d.name || d.id)
       .attr('dy', (d) => {
-        const tier = getNodeTier(d.id);
+        const tier = getTier(d.id);
         return tier === 2 ? 20 : -22;
       })
       .attr('text-anchor', 'middle')
@@ -274,7 +301,7 @@ export default function TopologyCanvas({
         });
       })
       .on('mouseleave', function (_event, d) {
-        const tier = getNodeTier(d.id);
+        const tier = getTier(d.id);
         const isSelected = selectedNodes.some((n) => n.id === d.id);
         d3.select(this)
           .select('circle')
@@ -326,7 +353,7 @@ export default function TopologyCanvas({
 
     svg.selectAll('.nodes g').each(function (d: any) {
       const isSelected = selectedNodes.some((n) => n.id === d.id);
-      const tier = d.id.includes('spine') ? 0 : d.id.includes('leaf') ? 1 : 2;
+      const tier = resolveTier(d);
       d3.select(this)
         .select('circle')
         .transition()
@@ -348,7 +375,7 @@ export default function TopologyCanvas({
         .attr('stroke-width', 1.8)
         .attr('stroke-opacity', 0.7);
       svg.selectAll('.nodes g').each(function (d: any) {
-        const tier = d.id.includes('spine') ? 0 : d.id.includes('leaf') ? 1 : 2;
+        const tier = resolveTier(d);
         d3.select(this)
           .select('circle')
           .attr('stroke', tier === 0 ? '#68e8e8' : tier === 1 ? '#3fbfbf' : '#2a8a8a')
@@ -407,7 +434,7 @@ export default function TopologyCanvas({
           .attr('stroke-width', 3.5)
           .attr('fill', '#0a4060');
       } else {
-        const tier = d.id.includes('spine') ? 0 : d.id.includes('leaf') ? 1 : 2;
+        const tier = resolveTier(d);
         d3.select(this)
           .select('circle')
           .transition()
