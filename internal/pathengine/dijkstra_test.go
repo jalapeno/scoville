@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/jalapeno/scoville/internal/graph"
+	"github.com/jalapeno/scoville/internal/srv6"
 )
 
 // makeDualSpineGraph adds a second spine to the standard graph so we have two
@@ -143,6 +144,82 @@ func TestDijkstra_SrcEqualsDst(t *testing.T) {
 	}
 	if len(spf.Edges) != 0 {
 		t.Errorf("want 0 edges for src==dst, got %d", len(spf.Edges))
+	}
+}
+
+func TestDijkstra_FlexAlgoFilter(t *testing.T) {
+	// Graph: leaf-1 can reach leaf-2 via spine-1 (cost 20) or spine-2 (cost 5).
+	// Only leaf-1, spine-1, and leaf-2 have algo-128 locators; spine-2 does not.
+	//
+	// Without algo filter: Dijkstra picks spine-2 (cheaper).
+	// With algo_id=128:    Dijkstra must pick spine-1 (spine-2 pruned).
+	g := graph.New("test")
+
+	algo128loc := func(nodeID, prefix, sid string) []srv6.Locator {
+		return []srv6.Locator{
+			{Prefix: prefix + "/48", AlgoID: 0, NodeSID: &srv6.SID{Value: sid, Behavior: srv6.BehaviorEnd}},
+			{Prefix: prefix + "28::/48", AlgoID: 128, NodeSID: &srv6.SID{Value: sid + "28::", Behavior: srv6.BehaviorEnd}},
+		}
+	}
+
+	mustAdd(t, g.AddVertex(&graph.Node{
+		BaseVertex:   graph.BaseVertex{ID: "leaf-1", Type: graph.VTNode},
+		SRv6Locators: algo128loc("leaf-1", "fc00:0:1::", "fc00:0:1::"),
+	}))
+	mustAdd(t, g.AddVertex(&graph.Node{
+		BaseVertex:   graph.BaseVertex{ID: "spine-1", Type: graph.VTNode},
+		SRv6Locators: algo128loc("spine-1", "fc00:0:2::", "fc00:0:2::"),
+	}))
+	mustAdd(t, g.AddVertex(&graph.Node{
+		BaseVertex:   graph.BaseVertex{ID: "leaf-2", Type: graph.VTNode},
+		SRv6Locators: algo128loc("leaf-2", "fc00:0:4::", "fc00:0:4::"),
+	}))
+	// spine-2 has no algo-128 locator — it is not in the Flex-Algo 128 topology.
+	mustAdd(t, g.AddVertex(&graph.Node{
+		BaseVertex: graph.BaseVertex{ID: "spine-2", Type: graph.VTNode},
+		SRv6Locators: []srv6.Locator{
+			{Prefix: "fc00:0:5::/48", AlgoID: 0, NodeSID: &srv6.SID{Value: "fc00:0:5::", Behavior: srv6.BehaviorEnd}},
+		},
+	}))
+
+	addEdge := func(id, src, dst string, cost uint32) {
+		mustAdd(t, g.AddEdge(&graph.LinkEdge{
+			BaseEdge:  graph.BaseEdge{ID: id, Type: graph.ETIGPAdjacency, SrcID: src, DstID: dst, Directed: true},
+			IGPMetric: cost,
+		}))
+	}
+	addEdge("e-l1-s1", "leaf-1", "spine-1", 10) // spine-1 path: cost 20
+	addEdge("e-s1-l2", "spine-1", "leaf-2", 10)
+	addEdge("e-l1-s2", "leaf-1", "spine-2", 1) // spine-2 path: cost 5 (cheaper)
+	addEdge("e-s2-l2", "spine-2", "leaf-2", 4)
+
+	ex := NewExcludedSet()
+	cf := CostFuncFor(MetricIGP)
+
+	// Without algo filter: spine-2 (cost 5) wins.
+	spf, err := Dijkstra(g, "leaf-1", "leaf-2", cf, graph.PathConstraints{}, ex)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if spf.NodeIDs[1] != "spine-2" {
+		t.Errorf("baseline: want spine-2 as transit (cost 5), got %s", spf.NodeIDs[1])
+	}
+
+	// With algo_id=128: spine-2 is pruned; spine-1 (cost 20) is the only path.
+	spf, err = Dijkstra(g, "leaf-1", "leaf-2", cf, graph.PathConstraints{AlgoID: 128}, ex)
+	if err != nil {
+		t.Fatalf("unexpected error with algo filter: %v", err)
+	}
+	if spf.NodeIDs[1] != "spine-1" {
+		t.Errorf("algo=128: want spine-1 as transit (spine-2 pruned), got %s", spf.NodeIDs[1])
+	}
+
+	// With algo_id=128 and spine-1 also excluded: no valid path.
+	ex2 := NewExcludedSet()
+	ex2.Nodes["spine-1"] = struct{}{}
+	_, err = Dijkstra(g, "leaf-1", "leaf-2", cf, graph.PathConstraints{AlgoID: 128}, ex2)
+	if err == nil {
+		t.Error("want error when all algo-128 paths excluded, got nil")
 	}
 }
 

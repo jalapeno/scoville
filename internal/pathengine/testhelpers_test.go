@@ -7,8 +7,13 @@ import (
 	"github.com/jalapeno/scoville/internal/srv6"
 )
 
-// f3216 is the F3216 uSID carrier structure used throughout tests.
+// f3216 is the F3216 uSID structure for uA SIDs (funcLen=16).
 var f3216 = &srv6.SIDStructure{LocatorBlockLen: 32, LocatorNodeLen: 16, FunctionLen: 16}
+
+// f3216uN is the F3216 uSID structure for uN SIDs (funcLen=0).
+// Real IOS-XR uN SIDs advertise FunctionLen=0: the node locator IS the SID,
+// no function bits are present. This must match srv6/usid_test.go.
+var f3216uN = &srv6.SIDStructure{LocatorBlockLen: 32, LocatorNodeLen: 16, FunctionLen: 0}
 
 // mustAdd calls t.Fatal if err is non-nil. Used to keep graph construction
 // in tests free of repetitive error checks.
@@ -41,21 +46,21 @@ func makeLeafSpineGraph(t testing.TB) *graph.Graph {
 		BaseVertex: graph.BaseVertex{ID: "leaf-1", Type: graph.VTNode},
 		SRv6Locators: []srv6.Locator{{
 			Prefix: "fc00:0:3::/48", AlgoID: 0,
-			NodeSID: &srv6.SID{Value: "fc00:0:3::", Behavior: srv6.BehaviorEnd, Structure: f3216},
+			NodeSID: &srv6.SID{Value: "fc00:0:3::", Behavior: srv6.BehaviorEnd, Structure: f3216uN},
 		}},
 	}))
 	mustAdd(t, g.AddVertex(&graph.Node{
 		BaseVertex: graph.BaseVertex{ID: "spine-1", Type: graph.VTNode},
 		SRv6Locators: []srv6.Locator{{
 			Prefix: "fc00:0:2::/48", AlgoID: 0,
-			NodeSID: &srv6.SID{Value: "fc00:0:2::", Behavior: srv6.BehaviorEnd, Structure: f3216},
+			NodeSID: &srv6.SID{Value: "fc00:0:2::", Behavior: srv6.BehaviorEnd, Structure: f3216uN},
 		}},
 	}))
 	mustAdd(t, g.AddVertex(&graph.Node{
 		BaseVertex: graph.BaseVertex{ID: "leaf-2", Type: graph.VTNode},
 		SRv6Locators: []srv6.Locator{{
 			Prefix: "fc00:0:4::/48", AlgoID: 0,
-			NodeSID: &srv6.SID{Value: "fc00:0:4::", Behavior: srv6.BehaviorEnd, Structure: f3216},
+			NodeSID: &srv6.SID{Value: "fc00:0:4::", Behavior: srv6.BehaviorEnd, Structure: f3216uN},
 		}},
 	}))
 

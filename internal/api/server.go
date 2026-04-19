@@ -7,6 +7,9 @@
 //	GET    /topology/{id}          — describe a topology (stats)
 //	GET    /topology/{id}/nodes    — list node IDs in a topology
 //	DELETE /topology/{id}          — remove a topology
+//	POST   /topology/{id}/policies — set/merge name→algo_id policy mappings
+//	GET    /topology/{id}/policies — list current policy mappings
+//	DELETE /topology/{id}/policies — clear all policy mappings
 //
 //	POST   /paths/request                  — request SRv6 paths for a workload
 //	GET    /paths/{workload_id}            — get workload allocation status
@@ -31,10 +34,11 @@ import (
 
 // Server holds the shared state accessed by all HTTP handlers.
 type Server struct {
-	store  *graph.Store
-	tables *allocation.TableSet
-	driver southbound.SouthboundDriver
-	log    *slog.Logger
+	store    *graph.Store
+	tables   *allocation.TableSet
+	driver   southbound.SouthboundDriver
+	log      *slog.Logger
+	policies *policyStore
 }
 
 // New creates a new API server backed by a no-op southbound driver. The store
@@ -46,7 +50,7 @@ func New(store *graph.Store, tables *allocation.TableSet, log *slog.Logger) *Ser
 // NewWithDriver creates a new API server with an explicit southbound driver.
 // Pass nil for driver to use a no-op (pull-only) driver.
 func NewWithDriver(store *graph.Store, tables *allocation.TableSet, driver southbound.SouthboundDriver, log *slog.Logger) *Server {
-	s := &Server{store: store, tables: tables, driver: driver, log: log}
+	s := &Server{store: store, tables: tables, driver: driver, log: log, policies: newPolicyStore()}
 	if s.driver == nil {
 		s.driver = noopDriver{}
 	}
@@ -92,6 +96,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /topology/{id}", s.handleTopologyGet)
 	mux.HandleFunc("GET /topology/{id}/nodes", s.handleTopologyNodes)
 	mux.HandleFunc("DELETE /topology/{id}", s.handleTopologyDelete)
+	mux.HandleFunc("POST /topology/{id}/policies", s.handlePoliciesSet)
+	mux.HandleFunc("GET /topology/{id}/policies", s.handlePoliciesGet)
+	mux.HandleFunc("DELETE /topology/{id}/policies", s.handlePoliciesDelete)
 
 	mux.HandleFunc("POST /paths/request", s.handlePathRequest)
 	mux.HandleFunc("GET /paths/state", s.handlePathState)

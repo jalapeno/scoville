@@ -166,6 +166,101 @@ func TestTopologyPush_MissingTopologyID(t *testing.T) {
 	}
 }
 
+func TestTopologyPush_IncrementalInvalidation(t *testing.T) {
+	// Topology v1: three nodes A, B, C.
+	const v1 = `{
+		"topology_id": "incr-topo",
+		"source":      "push",
+		"nodes": [
+			{"id": "node-a", "subtype": "switch"},
+			{"id": "node-b", "subtype": "switch"},
+			{"id": "node-c", "subtype": "switch"}
+		],
+		"edges": []
+	}`
+	// Topology v2: node-c removed.
+	const v2 = `{
+		"topology_id": "incr-topo",
+		"source":      "push",
+		"nodes": [
+			{"id": "node-a", "subtype": "switch"},
+			{"id": "node-b", "subtype": "switch"}
+		],
+		"edges": []
+	}`
+
+	tables, baseURL := newTestServer(t)
+
+	// Push v1.
+	resp := doRaw(t, http.MethodPost, baseURL+"/topology", v1)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("v1 push: want 200, got %d", resp.StatusCode)
+	}
+
+	table := tables.Get("incr-topo")
+	if table == nil {
+		t.Fatal("allocation table not created on first push")
+	}
+
+	// wl-affected: path traverses node-c; should be drained when c is removed.
+	table.RegisterPath(&graph.Path{
+		ID:        "path-through-c",
+		VertexIDs: []string{"node-a", "node-c"},
+	})
+	if err := table.AllocatePaths(&allocation.WorkloadAllocation{
+		WorkloadID: "wl-affected",
+		Sharing:    graph.SharingExclusive,
+	}, []string{"path-through-c"}); err != nil {
+		t.Fatalf("allocate wl-affected: %v", err)
+	}
+
+	// wl-safe: path stays within node-a and node-b; should remain active.
+	table.RegisterPath(&graph.Path{
+		ID:        "path-ab",
+		VertexIDs: []string{"node-a", "node-b"},
+	})
+	if err := table.AllocatePaths(&allocation.WorkloadAllocation{
+		WorkloadID: "wl-safe",
+		Sharing:    graph.SharingExclusive,
+	}, []string{"path-ab"}); err != nil {
+		t.Fatalf("allocate wl-safe: %v", err)
+	}
+
+	// Push v2 (node-c removed).
+	resp2 := doRaw(t, http.MethodPost, baseURL+"/topology", v2)
+	resp2.Body.Close()
+	if resp2.StatusCode != http.StatusOK {
+		t.Fatalf("v2 push: want 200, got %d", resp2.StatusCode)
+	}
+
+	// The same table instance must still be in use — not replaced.
+	if tables.Get("incr-topo") != table {
+		t.Error("allocation table was replaced on incremental push; expected same instance")
+	}
+
+	// wl-affected must be DRAINING.
+	wlAffected, ok := table.GetWorkload("wl-affected")
+	if !ok {
+		t.Fatal("wl-affected not found in table")
+	}
+	if wlAffected.State != allocation.WorkloadDraining {
+		t.Errorf("wl-affected: want DRAINING, got %s", wlAffected.State)
+	}
+	if wlAffected.DrainReason != allocation.DrainReasonTopologyChange {
+		t.Errorf("wl-affected drain reason: want topology_change, got %s", wlAffected.DrainReason)
+	}
+
+	// wl-safe must still be ACTIVE.
+	wlSafe, ok := table.GetWorkload("wl-safe")
+	if !ok {
+		t.Fatal("wl-safe not found in table")
+	}
+	if wlSafe.State != allocation.WorkloadActive {
+		t.Errorf("wl-safe: want ACTIVE, got %s", wlSafe.State)
+	}
+}
+
 func TestTopologyList_Empty(t *testing.T) {
 	_, baseURL := newTestServer(t)
 	resp := doRequest(t, http.MethodGet, baseURL+"/topology", nil)

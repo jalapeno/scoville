@@ -96,12 +96,16 @@ func TestDeriveReversePath(t *testing.T) {
 		}
 	}
 
-	// Segment list should be packed uSID: fc00:0:e001:e001:3::
-	//   leaf-2-eth0  uA e001 | spine-1-eth0 uA e001 | leaf-1 uN 0003
+	// Segment list: uA+uA+uN with 32-bit slots (maxFuncLen=16), capacity=3 → 1 container.
+	// Slot bytes [4:8]:
+	//   leaf-2-eth0  uA fc00:0:4:e001:: → 0x00,0x04,0xe0,0x01
+	//   spine-1-eth0 uA fc00:0:2:e001:: → 0x00,0x02,0xe0,0x01
+	//   leaf-1       uN fc00:0:3::       → 0x00,0x03,0x00,0x00
+	// Container: fc00:0000:0004:e001:0002:e001:0003:0000 = fc00:0:4:e001:2:e001:3:0
 	if len(rev.SegmentList.SIDs) != 1 {
 		t.Fatalf("want 1 packed SID, got %d: %v", len(rev.SegmentList.SIDs), rev.SegmentList.SIDs)
 	}
-	const want = "fc00:0:e001:e001:3::"
+	const want = "fc00:0:4:e001:2:e001:3:0"
 	if rev.SegmentList.SIDs[0] != want {
 		t.Errorf("reverse segment list: want %s, got %s", want, rev.SegmentList.SIDs[0])
 	}

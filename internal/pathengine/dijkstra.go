@@ -81,7 +81,7 @@ func Dijkstra(
 			if v != dstID && !NodeAllowed(v, ex) {
 				continue
 			}
-			if !EdgeAllowed(le, ex, constraints) {
+			if !EdgeAllowed(le, ex, constraints, g) {
 				continue
 			}
 

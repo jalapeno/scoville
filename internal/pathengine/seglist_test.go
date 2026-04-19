@@ -19,8 +19,12 @@ func runDijkstra(t testing.TB, g *graph.Graph, src, dst string) *SPFResult {
 
 func TestBuildSegmentList_UAChainWithUNAnchor(t *testing.T) {
 	// Forward path leaf-1→leaf-2 through spine-1.
-	// Expected packed uSID: fc00:0:e001:e002:4::
-	//   leaf-1-eth0 uA e001 | spine-1-eth1 uA e002 | leaf-2 uN 0004
+	// uA funcLen=16, uN funcLen=0 → maxFuncLen=16, slot=32bits=4bytes, capacity=3.
+	// Slot bytes [4:8] from each SID:
+	//   leaf-1-eth0 uA fc00:0:3:e001:: → 0x00,0x03,0xe0,0x01
+	//   spine-1-eth1 uA fc00:0:2:e002:: → 0x00,0x02,0xe0,0x02
+	//   leaf-2 uN fc00:0:4::           → 0x00,0x04,0x00,0x00
+	// Container: fc00:0000:0003:e001:0002:e002:0004:0000 = fc00:0:3:e001:2:e002:4:0
 	g := makeLeafSpineGraph(t)
 	spf := runDijkstra(t, g, "leaf-1", "leaf-2")
 
@@ -31,7 +35,7 @@ func TestBuildSegmentList_UAChainWithUNAnchor(t *testing.T) {
 	if len(sl.SIDs) != 1 {
 		t.Fatalf("want 1 packed container, got %d: %v", len(sl.SIDs), sl.SIDs)
 	}
-	const want = "fc00:0:e001:e002:4::"
+	const want = "fc00:0:3:e001:2:e002:4:0"
 	if sl.SIDs[0] != want {
 		t.Errorf("want %s, got %s", want, sl.SIDs[0])
 	}
@@ -41,8 +45,11 @@ func TestBuildSegmentList_UAChainWithUNAnchor(t *testing.T) {
 }
 
 func TestBuildSegmentList_WithTenantUDT(t *testing.T) {
-	// Same forward path with VRF tenant appended.
-	// Expected: fc00:0:e001:e002:4:d001::
+	// Forward path with VRF tenant uDT appended: uA + uA + uN + uDT.
+	// maxFuncLen=16 (uA and uDT both funcLen=16), slot=32bits=4bytes, capacity=3.
+	// 4 items → 2 containers:
+	//   Container 1: fc00:0:3:e001:2:e002:4:0  (uA + uA + uN)
+	//   Container 2: fc00:0:4:d001::            (uDT)
 	g := makeLeafSpineGraph(t)
 	mustAdd(t, g.AddVertex(&graph.VRF{
 		BaseVertex:  graph.BaseVertex{ID: "vrf-green", Type: graph.VTVRF},
@@ -59,12 +66,16 @@ func TestBuildSegmentList_WithTenantUDT(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if len(sl.SIDs) != 1 {
-		t.Fatalf("want 1 packed container, got %d: %v", len(sl.SIDs), sl.SIDs)
+	if len(sl.SIDs) != 2 {
+		t.Fatalf("want 2 containers (capacity=3, 4 items), got %d: %v", len(sl.SIDs), sl.SIDs)
 	}
-	const want = "fc00:0:e001:e002:4:d001::"
-	if sl.SIDs[0] != want {
-		t.Errorf("want %s, got %s", want, sl.SIDs[0])
+	const want0 = "fc00:0:3:e001:2:e002:4:0"
+	const want1 = "fc00:0:4:d001::"
+	if sl.SIDs[0] != want0 {
+		t.Errorf("container 0: want %s, got %s", want0, sl.SIDs[0])
+	}
+	if sl.SIDs[1] != want1 {
+		t.Errorf("container 1: want %s, got %s", want1, sl.SIDs[1])
 	}
 }
 

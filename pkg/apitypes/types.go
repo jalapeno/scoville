@@ -110,6 +110,13 @@ type PathRequest struct {
 	//   [uA chain] | dest-locator/uA | uDT(TenantID)
 	// Corresponds to Options 1, 2b, and 3 in the multi-tenancy whitepaper.
 	TenantID string `json:"tenant_id,omitempty"`
+
+	// Policy is an optional named policy string that maps to a Flex-Algo ID
+	// registered via POST /topology/{id}/policies. When set it is resolved to
+	// an algo_id before the path engine runs; it takes precedence over
+	// Constraints.AlgoID if both are provided.
+	// Example values: "carbon-optimized", "latency-sensitive", "backbone-algo128"
+	Policy string `json:"policy,omitempty"`
 }
 
 // PathRequestConstraints carries optional fine-grained TE constraints.
@@ -236,6 +243,32 @@ type FlowEntry struct {
 // AllocationTableResponse is returned by GET /paths/state.
 type AllocationTableResponse struct {
 	Topologies []interface{} `json:"topologies"` // []allocation.TableSnapshot
+}
+
+// --- Policy API -----------------------------------------------------------
+
+// PolicyEntry maps a human-readable policy name to a Flex-Algo ID.
+// Callers can then reference the policy by name in PathRequest.Policy rather
+// than embedding numeric algo IDs in their job specifications.
+type PolicyEntry struct {
+	// Name is the human-readable identifier, e.g. "carbon-optimized".
+	Name string `json:"name"`
+	// AlgoID is the Flex-Algo identifier (typically 128–255) that the policy
+	// resolves to. AlgoID 0 removes the policy.
+	AlgoID uint8 `json:"algo_id"`
+}
+
+// PoliciesRequest is the body for POST /topology/{id}/policies.
+// The supplied entries are merged into (or removed from) the existing mapping.
+// To remove a policy, include it with algo_id=0.
+type PoliciesRequest struct {
+	Policies []PolicyEntry `json:"policies"`
+}
+
+// PoliciesResponse is returned by GET /topology/{id}/policies.
+type PoliciesResponse struct {
+	TopologyID string        `json:"topology_id"`
+	Policies   []PolicyEntry `json:"policies"`
 }
 
 // --- Error response -------------------------------------------------------

@@ -49,6 +49,23 @@ func (s *Server) handlePathRequest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Resolve a named policy to an algo_id, overriding any explicit algo_id in
+	// Constraints. This decouples job specifications from IGP internals: the
+	// operator registers mappings (e.g. "carbon-optimized" → 130) once via
+	// POST /topology/{id}/policies; job schedulers reference them by name.
+	if req.Policy != "" {
+		algoID, ok := s.policies.Resolve(req.TopologyID, req.Policy)
+		if !ok {
+			writeError(w, http.StatusUnprocessableEntity,
+				fmt.Sprintf("unknown policy %q for topology %q", req.Policy, req.TopologyID))
+			return
+		}
+		if req.Constraints == nil {
+			req.Constraints = &apitypes.PathRequestConstraints{}
+		}
+		req.Constraints.AlgoID = algoID
+	}
+
 	// Resolve service level presets into disjointness + sharing.
 	disjointness, sharing := resolveServiceLevel(req)
 

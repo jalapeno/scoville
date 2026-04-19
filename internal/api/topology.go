@@ -27,16 +27,20 @@ func (s *Server) handleTopologyPush(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Drain active workloads on the existing topology before replacing it so
-	// they move through the DRAINING grace period rather than being silently
-	// dropped.
-	if old := s.tables.Get(g.ID()); old != nil {
-		old.DrainAll()
-		s.log.Info("topology replaced; active workloads drained", "topology_id", g.ID())
+	// Incremental update: if a topology with this ID already exists, only
+	// invalidate workloads whose paths traverse elements that were removed.
+	// Workloads on paths that still exist in the new topology remain active.
+	// If this is a first push, create a fresh allocation table.
+	if oldG := s.store.Get(g.ID()); oldG != nil {
+		if table := s.tables.Get(g.ID()); table != nil {
+			invalidateRemovedElements(oldG, g, table)
+		}
+		s.log.Info("topology updated incrementally", "topology_id", g.ID())
+	} else {
+		s.tables.Put(g.ID(), allocation.NewTable(g.ID()))
 	}
 
 	s.store.Put(g)
-	s.tables.Put(g.ID(), allocation.NewTable(g.ID()))
 
 	s.log.Info("topology loaded", "topology_id", g.ID(), "stats", g.Stats())
 
@@ -45,6 +49,32 @@ func (s *Server) handleTopologyPush(w http.ResponseWriter, r *http.Request) {
 		Description: doc.Description,
 		Stats:       g.Stats(),
 	})
+}
+
+// invalidateRemovedElements drains workloads whose paths traverse any vertex or
+// edge that is present in oldG but absent from newG. Called on incremental
+// topology push so only affected allocations are invalidated — workloads on
+// paths that remain topologically valid continue uninterrupted.
+func invalidateRemovedElements(oldG, newG *graph.Graph, table *allocation.Table) {
+	newVerts := make(map[string]struct{}, len(newG.AllVertices()))
+	for _, v := range newG.AllVertices() {
+		newVerts[v.GetID()] = struct{}{}
+	}
+	for _, v := range oldG.AllVertices() {
+		if _, exists := newVerts[v.GetID()]; !exists {
+			table.InvalidateElement(v.GetID())
+		}
+	}
+
+	newEdges := make(map[string]struct{}, len(newG.AllEdges()))
+	for _, e := range newG.AllEdges() {
+		newEdges[e.GetID()] = struct{}{}
+	}
+	for _, e := range oldG.AllEdges() {
+		if _, exists := newEdges[e.GetID()]; !exists {
+			table.InvalidateElement(e.GetID())
+		}
+	}
 }
 
 func (s *Server) handleTopologyList(w http.ResponseWriter, r *http.Request) {

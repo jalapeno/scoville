@@ -116,8 +116,8 @@ func (ex *ExcludedSet) AddPath(p *graph.Path, level graph.DisjointnessLevel, g *
 }
 
 // EdgeAllowed returns true if the given LinkEdge may be used in a path,
-// given the exclusion set and path constraints.
-func EdgeAllowed(e *graph.LinkEdge, ex *ExcludedSet, c graph.PathConstraints) bool {
+// given the graph, exclusion set, and path constraints.
+func EdgeAllowed(e *graph.LinkEdge, ex *ExcludedSet, c graph.PathConstraints, g *graph.Graph) bool {
 	// Excluded edge ID.
 	if _, excluded := ex.Edges[e.GetID()]; excluded {
 		return false
@@ -151,7 +151,36 @@ func EdgeAllowed(e *graph.LinkEdge, ex *ExcludedSet, c graph.PathConstraints) bo
 		}
 	}
 
+	// Flex-Algo: when a specific algorithm is requested, only traverse edges
+	// where both endpoint nodes participate in that algorithm. Participation is
+	// indicated by the node having an SRv6 locator with the matching AlgoID —
+	// the same signal BGP-LS uses to distribute Flex-Algo topology membership.
+	if c.AlgoID != 0 {
+		if !nodeHasAlgo(g, e.GetSrcID(), c.AlgoID) || !nodeHasAlgo(g, e.GetDstID(), c.AlgoID) {
+			return false
+		}
+	}
+
 	return true
+}
+
+// nodeHasAlgo reports whether the node identified by nodeID has an SRv6
+// locator for the given Flex-Algo algorithm ID.
+func nodeHasAlgo(g *graph.Graph, nodeID string, algoID uint8) bool {
+	v := g.GetVertex(nodeID)
+	if v == nil {
+		return false
+	}
+	n, ok := v.(*graph.Node)
+	if !ok {
+		return false
+	}
+	for _, loc := range n.SRv6Locators {
+		if loc.AlgoID == algoID {
+			return true
+		}
+	}
+	return false
 }
 
 // NodeAllowed returns true if a transit node may be visited.
