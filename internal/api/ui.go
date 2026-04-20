@@ -36,11 +36,11 @@ func (s *Server) handleTopologyGraph(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Collect all Node vertices
-	nodeVerts := g.VerticesByType(graph.VTNode)
-	nodes := make([]uiGraphNode, 0, len(nodeVerts))
-	nodeIDs := make(map[string]struct{}, len(nodeVerts))
-	for _, v := range nodeVerts {
+	nodes := make([]uiGraphNode, 0)
+	nodeIDs := make(map[string]struct{})
+
+	// Node vertices
+	for _, v := range g.VerticesByType(graph.VTNode) {
 		n := uiGraphNode{ID: v.GetID()}
 		if nd, ok := v.(*graph.Node); ok {
 			n.Name = nd.Name
@@ -49,16 +49,31 @@ func (s *Server) handleTopologyGraph(w http.ResponseWriter, r *http.Request) {
 		nodeIDs[v.GetID()] = struct{}{}
 	}
 
-	// Also include Endpoint vertices
-	epVerts := g.VerticesByType(graph.VTEndpoint)
-	for _, v := range epVerts {
-		nodes = append(nodes, uiGraphNode{ID: v.GetID()})
+	// Endpoint vertices
+	for _, v := range g.VerticesByType(graph.VTEndpoint) {
+		n := uiGraphNode{ID: v.GetID()}
+		if ep, ok := v.(*graph.Endpoint); ok {
+			n.Name = ep.Name
+		}
+		nodes = append(nodes, n)
 		nodeIDs[v.GetID()] = struct{}{}
 	}
 
-	// Collect LinkEdge and AttachmentEdge as links
+	// Prefix vertices — present in prefix-layer graphs (underlay-prefixes-v4/v6).
+	// Include them so the graph endpoint is useful for those topologies too.
+	for _, v := range g.VerticesByType(graph.VTPrefix) {
+		n := uiGraphNode{ID: v.GetID()}
+		if pv, ok := v.(*graph.Prefix); ok {
+			n.Name = pv.Prefix // CIDR string as display name
+		}
+		nodes = append(nodes, n)
+		nodeIDs[v.GetID()] = struct{}{}
+	}
+
+	// Collect edges where both endpoints are in the node set.
+	// Initialize as non-nil so the JSON field is always an array, never null.
 	seen := make(map[string]struct{})
-	var links []uiGraphLink
+	links := make([]uiGraphLink, 0)
 	for _, e := range g.AllEdges() {
 		// Only include edges where both ends are in our node set
 		src, dst := e.GetSrcID(), e.GetDstID()
