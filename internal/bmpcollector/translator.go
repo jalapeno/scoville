@@ -675,7 +675,25 @@ func (h *unicastPrefixHandler) Handle(data []byte, store *graph.Store) error {
 	// Check whether this prefix arrived from a known external BGP peer.
 	// If so, model it as a BGPReachabilityEdge from the peer vertex to the
 	// prefix vertex instead of the generic OwnershipEdge to a stub nexthop.
-	if peerSpec := h.updater.LookupPeerSpec(msg.PeerIP); peerSpec != nil {
+	//
+	// Two lookup paths:
+	//   1. Direct: msg.PeerIP matches an eBGP session RemoteIP. Covers prefixes
+	//      received directly from an eBGP neighbour.
+	//   2. Nexthop fallback: msg.PeerIP is an iBGP session (not registered in
+	//      peerSpecs). iBGP preserves the original eBGP NEXT_HOP, so we try the
+	//      nexthop IP. peerSpecs only contains eBGP peers, so false positives are
+	//      impossible. Covers IPv6 unicast prefixes reflected via iBGP loopbacks
+	//      (e.g. fc00:0:6::1) where the nexthop is the original eBGP peer's IPv6
+	//      address.
+	peerSpecForPrefix := h.updater.LookupPeerSpec(msg.PeerIP)
+	if peerSpecForPrefix == nil && msg.Nexthop != "" {
+		primaryNexthop := msg.Nexthop
+		if i := strings.IndexByte(primaryNexthop, ','); i >= 0 {
+			primaryNexthop = primaryNexthop[:i]
+		}
+		peerSpecForPrefix = h.updater.LookupPeerSpec(primaryNexthop)
+	}
+	if peerSpec := peerSpecForPrefix; peerSpec != nil {
 		pfx, _, _ := translateUnicastPrefix(&msg)
 		reach := translateBGPReachability(peerSpec.ID, pfxID, &msg)
 		if msg.Action == "del" {
