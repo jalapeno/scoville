@@ -278,20 +278,35 @@ type GraphStats struct {
 
 // Store manages a collection of named Graph instances.
 type Store struct {
-	mu     sync.RWMutex
-	graphs map[string]*Graph
+	mu       sync.RWMutex
+	graphs   map[string]*Graph
+	versions map[string]int64 // monotonically incremented on each Put
 }
 
 // NewStore creates an empty topology store.
 func NewStore() *Store {
-	return &Store{graphs: make(map[string]*Graph)}
+	return &Store{
+		graphs:   make(map[string]*Graph),
+		versions: make(map[string]int64),
+	}
 }
 
-// Put inserts or replaces a graph in the store.
+// Put inserts or replaces a graph in the store and increments its version
+// counter so that auto-compose loops can detect stale snapshots.
 func (s *Store) Put(g *Graph) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.graphs[g.id] = g
+	s.versions[g.id]++
+}
+
+// Version returns the current write version for the graph with the given ID.
+// Returns 0 if the graph has never been Put. Each successful Put increments
+// the version by 1, so callers can detect changes by comparing snapshots.
+func (s *Store) Version(id string) int64 {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.versions[id]
 }
 
 // Get returns the graph with the given topology ID, or nil if not found.

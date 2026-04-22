@@ -30,6 +30,8 @@ spec:
             - --bmp-consumer=$(BMP_CONSUMER)
             - --encap-mode=$(ENCAP_MODE)
             - --gnmi-target-map=$(GNMI_TARGET_MAP)
+            - --compose=ipv4-graph=$(BMP_TOPO)-v4,$(BMP_TOPO)-peers,$(BMP_TOPO)-prefixes-v4
+            - --compose=ipv6-graph=$(BMP_TOPO)-v6,$(BMP_TOPO)-peers,$(BMP_TOPO)-prefixes-v6
 
           env:
             - name: NATS_URL

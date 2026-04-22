@@ -27,10 +27,12 @@ package main
 import (
 	"context"
 	"flag"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 
 	"github.com/jalapeno/syd/internal/allocation"
@@ -43,6 +45,38 @@ import (
 	uiembed "github.com/jalapeno/syd/ui"
 )
 
+// composeFlag is a repeatable flag value for --compose name=src1,src2,...
+type composeFlag []api.ComposeRecipe
+
+func (f *composeFlag) String() string {
+	if len(*f) == 0 {
+		return ""
+	}
+	parts := make([]string, len(*f))
+	for i, r := range *f {
+		parts[i] = r.TargetID + "=" + strings.Join(r.SourceIDs, ",")
+	}
+	return strings.Join(parts, " ")
+}
+
+func (f *composeFlag) Set(s string) error {
+	idx := strings.IndexByte(s, '=')
+	if idx < 0 {
+		return fmt.Errorf("--compose: expected name=src1,src2,... got %q", s)
+	}
+	targetID := s[:idx]
+	if targetID == "" {
+		return fmt.Errorf("--compose: target name must not be empty")
+	}
+	rawSources := s[idx+1:]
+	if rawSources == "" {
+		return fmt.Errorf("--compose: sources must not be empty")
+	}
+	sources := strings.Split(rawSources, ",")
+	*f = append(*f, api.ComposeRecipe{TargetID: targetID, SourceIDs: sources})
+	return nil
+}
+
 func main() {
 	addr        := flag.String("addr",         ":8080",                  "HTTP listen address")
 	bmpEnabled  := flag.Bool("bmp",            false,                    "Enable BMP/GoBMP NATS collector")
@@ -51,6 +85,8 @@ func main() {
 	bmpTopo     := flag.String("bmp-topo",     "underlay",               "Topology ID for BMP-learned underlay graph")
 	encapMode   := flag.String("encap-mode",   "host",                   "Southbound encap mode: host or tor")
 	targetMap   := flag.String("gnmi-target-map", "",                    "nodeID=host:port,... for gNMI target resolution")
+	var composeRecipes composeFlag
+	flag.Var(&composeRecipes, "compose", "Auto-compose: name=src1,src2,... (repeatable)")
 	flag.Parse()
 
 	log := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
@@ -124,6 +160,17 @@ func main() {
 
 	// --- HTTP API server -----------------------------------------------------
 	srv := api.NewWithDriver(store, tables, driver, log)
+
+	// Start auto-compose loops for any --compose recipes.
+	if len(composeRecipes) > 0 {
+		srv.StartAutoCompose(ctx, []api.ComposeRecipe(composeRecipes))
+		for _, r := range composeRecipes {
+			log.Info("auto-compose registered",
+				"target", r.TargetID,
+				"sources", r.SourceIDs,
+			)
+		}
+	}
 
 	// Combine API routes with embedded UI static assets.
 	// API routes take priority; unmatched paths fall through to the UI SPA.

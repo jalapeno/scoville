@@ -26,6 +26,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
+	"time"
 
 	"github.com/jalapeno/syd/internal/allocation"
 	"github.com/jalapeno/syd/internal/graph"
@@ -78,6 +79,71 @@ func NewWithDriver(store *graph.Store, tables *allocation.TableSet, driver south
 		}()
 	})
 	return s
+}
+
+// ComposeRecipe describes a single auto-compose job: a target topology ID and
+// the ordered list of source topology IDs to merge into it.
+type ComposeRecipe struct {
+	TargetID  string
+	SourceIDs []string
+}
+
+// StartAutoCompose launches a background goroutine that watches the source
+// graphs named in each recipe and re-composes the target whenever any source
+// version changes. It also composes immediately on first call (once all sources
+// are present). The goroutine exits when ctx is cancelled.
+func (s *Server) StartAutoCompose(ctx context.Context, recipes []ComposeRecipe) {
+	for _, r := range recipes {
+		go s.autoComposeLoop(ctx, r)
+	}
+}
+
+func (s *Server) autoComposeLoop(ctx context.Context, recipe ComposeRecipe) {
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+
+	var lastVersionSum int64
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+
+		// Gather source graphs; skip if any are not yet available.
+		sources := make([]*graph.Graph, 0, len(recipe.SourceIDs))
+		missing := false
+		var versionSum int64
+		for _, id := range recipe.SourceIDs {
+			g := s.store.Get(id)
+			if g == nil {
+				missing = true
+				break
+			}
+			sources = append(sources, g)
+			versionSum += s.store.Version(id)
+		}
+		if missing {
+			continue
+		}
+
+		// Only recompose when something changed.
+		if versionSum == lastVersionSum {
+			continue
+		}
+		lastVersionSum = versionSum
+
+		composed := graph.Compose(recipe.TargetID, sources...)
+		s.store.Put(composed)
+		s.tables.Put(composed.ID(), allocation.NewTable(composed.ID()))
+
+		s.log.Info("auto-compose: topology recomposed",
+			"topology_id", recipe.TargetID,
+			"sources", recipe.SourceIDs,
+			"stats", composed.Stats(),
+		)
+	}
 }
 
 // noopDriver is used when no explicit southbound driver is configured.
