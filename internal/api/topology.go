@@ -171,6 +171,10 @@ func (s *Server) handleTopologyCompose(w http.ResponseWriter, r *http.Request) {
 	composed := graph.Compose(req.TopologyID, sources...)
 	s.store.Put(composed)
 
+	// Create or reset the allocation table for the composed topology.
+	// A composed graph is a fresh snapshot, so any prior allocations are stale.
+	s.tables.Put(composed.ID(), allocation.NewTable(composed.ID()))
+
 	s.log.Info("topology composed",
 		"topology_id", req.TopologyID,
 		"sources", req.Sources,
