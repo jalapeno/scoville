@@ -979,7 +979,7 @@ The fabric nodes have SRv6 node SIDs (spines fc00:0:1000::-fc00:0:1003::,
 leafs fc00:0:2000::-fc00:0:2007::) so segment_list will contain packed uN SIDs.
 
 ```bash
-# gpu-001 (on leaf-01) → gpu-033 (on leaf-05) — crosses spine layer
+# gpu-001 (on leaf-01) → gpu-017 (on leaf-05) — crosses spine layer
 curl -s -X POST http://$NODE:30080/paths/request \
   -H 'Content-Type: application/json' \
   -d '{
@@ -987,7 +987,7 @@ curl -s -X POST http://$NODE:30080/paths/request \
     "workload_id": "clos-test",
     "endpoints": [
       {"id": "gpu-001"},
-      {"id": "gpu-033"}
+      {"id": "gpu-017"}
     ],
     "pairing_mode": "all_directed"
   }' | python3 -c "
@@ -997,13 +997,69 @@ for p in d['paths'][:4]:
     print(f'{p[\"src_id\"]} -> {p[\"dst_id\"]}')
     print(f'  hops: {p[\"metric\"][\"hop_count\"]}')
     print(f'  path: {\" -> \".join(p.get(\"vertex_ids\",[]))}')
+    print(f'  sids: {p[\"segment_list\"][\"sids\"]}')
 "
 
 curl -s -X POST http://$NODE:30080/paths/clos-test/complete \
   -H 'Content-Type: application/json' -d '{"immediate":true}'
 ```
 
-Expected: 3-hop paths (leaf-01 → spine-N → leaf-05), with ECMP across all 4 spines.
+Expected: 2-hop paths (leaf-01 → spine-N → leaf-05), with ECMP across all 4 spines.
+After trimming to 4 GPUs/leaf: gpu-001..004 on leaf-01, gpu-005..008 on leaf-02,
+gpu-009..012 on leaf-03, gpu-013..016 on leaf-04, gpu-017..020 on leaf-05, etc.
+
+### 8-GPU all-reduce workload (one GPU per leaf)
+
+Representative AI all-reduce workload: one GPU per leaf, `bidir_paired` mode so
+forward and reverse flows for each pair share the same physical links.
+
+**Note on disjointness:** do NOT use `disjointness: link` here. A 4-spine 8-leaf
+Clos has only 32 spine-leaf links; each 2-hop path consumes 2, so the hard ceiling
+on strictly link-disjoint paths is 16. The greedy SPF will produce only ~22 paths
+before the topology runs dry. For all-to-all AI workloads you want all 56 paths —
+let ECMP across the spines provide the redundancy, not the disjointness exclusion.
+
+```bash
+curl -s -X POST http://$NODE:30080/paths/request \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "topology_id": "clos-fabric",
+    "workload_id": "clos-allreduce-8",
+    "endpoints": [
+      {"id": "gpu-001"},
+      {"id": "gpu-005"},
+      {"id": "gpu-009"},
+      {"id": "gpu-013"},
+      {"id": "gpu-017"},
+      {"id": "gpu-021"},
+      {"id": "gpu-025"},
+      {"id": "gpu-029"}
+    ],
+    "pairing_mode": "bidir_paired"
+  }' | python3 -c "
+import sys, json
+d = json.load(sys.stdin)
+print(f'workload:  {d[\"workload_id\"]}')
+print(f'paths:     {len(d[\"paths\"])}  (expect 56 = 8*(8-1)/2 pairs x2 directions)')
+print(f'free used: {d[\"allocation_state\"][\"paths_from_free\"]}')
+for p in d['paths'][:4]:
+    print(f'  {p[\"src_id\"]} -> {p[\"dst_id\"]}  hops={p[\"metric\"][\"hop_count\"]}  sids={p[\"segment_list\"][\"sids\"]}')
+print('  ...')
+"
+
+# Check flows (56 entries, one per directed flow)
+curl -s http://$NODE:30080/paths/clos-allreduce-8/flows | python3 -c "
+import sys, json
+d = json.load(sys.stdin)
+print(f'flows: {len(d[\"flows\"])}')
+for f in d['flows'][:2]:
+    srh = '+ SRH' if f.get('srh_raw') else ''
+    print(f'  {f[\"src_node_id\"]} -> {f[\"dst_node_id\"]}  outer_da={f[\"outer_da\"]} {srh}')
+"
+
+curl -s -X POST http://$NODE:30080/paths/clos-allreduce-8/complete \
+  -H 'Content-Type: application/json' -d '{"immediate":true}'
+```
 
 ### Cleanup
 

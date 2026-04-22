@@ -378,12 +378,16 @@ func TestPeerHandler_Up(t *testing.T) {
 	_, store, handlers := newHandlerEnv()
 	h := handlerBySubject(handlers, SubjectPeer)
 
+	// eBGP session: local_asn != remote_asn, remote_bgp_id is the peer's router-ID.
+	const remoteBGPID = "192.0.2.10"
+	const remoteIP = "192.0.2.2"
 	payload := mustJSON(map[string]any{
-		"action":       "add",
-		"local_bgp_id": "192.0.2.1",
-		"remote_ip":    "192.0.2.2",
-		"local_asn":    65001,
-		"remote_asn":   65002,
+		"action":         "add",
+		"local_bgp_id":   "192.0.2.1",
+		"remote_ip":      remoteIP,
+		"remote_bgp_id":  remoteBGPID,
+		"local_asn":      65001,
+		"remote_asn":     65002,
 	})
 
 	if err := h.Handle(payload, store); err != nil {
@@ -395,14 +399,19 @@ func TestPeerHandler_Up(t *testing.T) {
 	if g == nil {
 		t.Fatal("underlay-peers graph not created")
 	}
-	// Stub node vertices must exist for both BGP endpoints.
+	// Local router stub vertex keyed by its BGP-ID.
 	if g.GetVertex("192.0.2.1") == nil {
 		t.Error("local BGP-ID vertex 192.0.2.1 not found in peers graph")
 	}
-	if g.GetVertex("192.0.2.2") == nil {
-		t.Error("remote IP vertex 192.0.2.2 not found in peers graph")
+	// External peer vertex keyed by "peer:<RemoteBGPID>_<RemoteIP>".
+	wantPeerID := "peer:" + remoteBGPID + "_" + remoteIP
+	peerV := g.GetVertex(wantPeerID)
+	if peerV == nil {
+		t.Errorf("external peer vertex %q not found in peers graph", wantPeerID)
+	} else if n := peerV.(*graph.Node); n.Subtype != graph.NSExternalBGP {
+		t.Errorf("peer vertex Subtype = %q, want %q", n.Subtype, graph.NSExternalBGP)
 	}
-	e := g.GetEdge("bgpsess:192.0.2.1:192.0.2.2")
+	e := g.GetEdge("bgpsess:192.0.2.1:" + remoteIP)
 	if e == nil {
 		t.Fatal("BGP session edge not found")
 	}
@@ -416,34 +425,50 @@ func TestPeerHandler_Up(t *testing.T) {
 	if sess.RemoteASN != 65002 {
 		t.Errorf("RemoteASN = %d, want 65002", sess.RemoteASN)
 	}
+	if sess.DstID != wantPeerID {
+		t.Errorf("session DstID = %q, want %q", sess.DstID, wantPeerID)
+	}
 }
 
 func TestPeerHandler_Down(t *testing.T) {
 	_, store, handlers := newHandlerEnv()
 	h := handlerBySubject(handlers, SubjectPeer)
 
-	// Bring up.
+	const remoteBGPID = "192.0.2.10"
+	const remoteIP = "192.0.2.2"
+	wantPeerID := "peer:" + remoteBGPID + "_" + remoteIP
+
+	// Bring up (eBGP — differing ASNs required).
 	up := mustJSON(map[string]any{
-		"action":       "add",
-		"local_bgp_id": "192.0.2.1",
-		"remote_ip":    "192.0.2.2",
+		"action":        "add",
+		"local_bgp_id":  "192.0.2.1",
+		"remote_ip":     remoteIP,
+		"remote_bgp_id": remoteBGPID,
+		"local_asn":     65001,
+		"remote_asn":    65002,
 	})
 	_ = h.Handle(up, store)
 
 	// Bring down.
 	down := mustJSON(map[string]any{
-		"action":       "del",
-		"local_bgp_id": "192.0.2.1",
-		"remote_ip":    "192.0.2.2",
+		"action":        "del",
+		"local_bgp_id":  "192.0.2.1",
+		"remote_ip":     remoteIP,
+		"remote_bgp_id": remoteBGPID,
+		"local_asn":     65001,
+		"remote_asn":    65002,
 	})
 	if err := h.Handle(down, store); err != nil {
 		t.Fatalf("down returned error: %v", err)
 	}
 
 	g := store.Get("underlay-peers")
-	e := g.GetEdge("bgpsess:192.0.2.1:192.0.2.2")
+	if g == nil {
+		t.Fatal("underlay-peers graph not created")
+	}
+	e := g.GetEdge("bgpsess:192.0.2.1:" + remoteIP)
 	if e == nil {
-		t.Fatal("BGP session edge should still exist after peer down (state updated in place)")
+		t.Fatalf("BGP session edge should still exist after peer down (state updated in place); peer vertex = %v", g.GetVertex(wantPeerID))
 	}
 	sess := e.(*graph.BGPSessionEdge)
 	if sess.IsUp {
