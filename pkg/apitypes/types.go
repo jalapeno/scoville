@@ -118,6 +118,20 @@ type PathRequest struct {
 	// Example values: "carbon-optimized", "latency-sensitive", "backbone-algo128"
 	Policy string `json:"policy,omitempty"`
 
+	// DstPrefix, if set, routes each endpoint in Endpoints to the external prefix
+	// CIDR over SRv6. The path engine resolves the prefix to its advertising IGP
+	// border node and computes SRv6 paths terminating there. BGPNexthop in each
+	// PathResult carries the BGP next-hop for the final hop beyond the SRv6
+	// domain. Mutually exclusive with SrcPrefix. Requires a composite topology
+	// (e.g. "ipv6-graph") that includes BGPReachabilityEdges.
+	DstPrefix string `json:"dst_prefix,omitempty"`
+
+	// SrcPrefix, if set, routes from the external prefix's advertising border
+	// node to each endpoint in Endpoints. Models external-to-fabric ingress:
+	// the border router imposes SRv6 and forwards to the GPU/service endpoint.
+	// Mutually exclusive with DstPrefix. Requires a composite topology.
+	SrcPrefix string `json:"src_prefix,omitempty"`
+
 	// SegmentListMode controls how uSID containers are constructed.
 	//
 	// "ua" (default) — one 16-bit slot per hop: function bits only (globally
@@ -156,6 +170,12 @@ type PathResult struct {
 	VertexIDs []string `json:"vertex_ids,omitempty"`
 	// EdgeIDs lists the LinkEdge IDs traversed in order (for visualization).
 	EdgeIDs []string `json:"edge_ids,omitempty"`
+	// BGPNexthop is the BGP NEXT_HOP for the external prefix. Set on egress
+	// paths (dst_prefix requests); empty for fabric-only paths.
+	BGPNexthop string `json:"bgp_nexthop,omitempty"`
+	// PrefixID is the resolved prefix vertex ID (e.g. "pfx:10.0.0.0/8").
+	// Set on both egress and ingress prefix paths.
+	PrefixID string `json:"prefix_id,omitempty"`
 }
 
 // PathResultMetric summarises path quality for the caller.

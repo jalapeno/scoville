@@ -32,8 +32,21 @@ func (s *Server) handlePathRequest(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "topology_id is required")
 		return
 	}
-	if len(req.Endpoints) < 2 {
-		writeError(w, http.StatusBadRequest, "at least 2 endpoints are required")
+	if req.DstPrefix != "" && req.SrcPrefix != "" {
+		writeError(w, http.StatusBadRequest, "dst_prefix and src_prefix are mutually exclusive")
+		return
+	}
+	isPrefixRequest := req.DstPrefix != "" || req.SrcPrefix != ""
+	minEndpoints := 2
+	if isPrefixRequest {
+		minEndpoints = 1
+	}
+	if len(req.Endpoints) < minEndpoints {
+		if isPrefixRequest {
+			writeError(w, http.StatusBadRequest, "at least 1 endpoint is required for prefix path requests")
+		} else {
+			writeError(w, http.StatusBadRequest, "at least 2 endpoints are required")
+		}
 		return
 	}
 
@@ -77,15 +90,40 @@ func (s *Server) handlePathRequest(w http.ResponseWriter, r *http.Request) {
 		"sharing", sharing,
 	)
 
-	result, err := pathengine.Compute(g, table, req, disjointness, sharing)
-	if err != nil {
-		writeError(w, http.StatusUnprocessableEntity, err.Error())
-		return
+	// Route to prefix-aware or standard compute path.
+	var paths []graph.Path
+	var failedPairs []string
+	var prefixID, bgpNexthop string
+
+	if req.DstPrefix != "" || req.SrcPrefix != "" {
+		cidr := req.DstPrefix
+		direction := pathengine.PrefixDst
+		if req.SrcPrefix != "" {
+			cidr = req.SrcPrefix
+			direction = pathengine.PrefixSrc
+		}
+		presult, err := pathengine.ComputePrefixPaths(g, table, req, cidr, direction, disjointness, sharing)
+		if err != nil {
+			writeError(w, http.StatusUnprocessableEntity, err.Error())
+			return
+		}
+		paths = presult.Paths
+		failedPairs = presult.FailedPairs
+		prefixID = presult.PrefixVertexID
+		bgpNexthop = presult.BGPNexthop
+	} else {
+		result, err := pathengine.Compute(g, table, req, disjointness, sharing)
+		if err != nil {
+			writeError(w, http.StatusUnprocessableEntity, err.Error())
+			return
+		}
+		paths = result.Paths
+		failedPairs = result.FailedPairs
 	}
 
 	// Convert graph.Path results to API response types.
-	apiPaths := make([]apitypes.PathResult, len(result.Paths))
-	for i, p := range result.Paths {
+	apiPaths := make([]apitypes.PathResult, len(paths))
+	for i, p := range paths {
 		apiPaths[i] = apitypes.PathResult{
 			SrcID:       p.SrcID,
 			DstID:       p.DstID,
@@ -93,6 +131,8 @@ func (s *Server) handlePathRequest(w http.ResponseWriter, r *http.Request) {
 			PathID:      p.ID,
 			VertexIDs:   p.VertexIDs,
 			EdgeIDs:     p.EdgeIDs,
+			BGPNexthop:  bgpNexthop,
+			PrefixID:    prefixID,
 			Metric: apitypes.PathResultMetric{
 				IGPMetric:    p.Metric.IGPMetric,
 				DelayUS:      p.Metric.DelayUS,
@@ -112,10 +152,10 @@ func (s *Server) handlePathRequest(w http.ResponseWriter, r *http.Request) {
 		},
 	}
 
-	if len(result.FailedPairs) > 0 {
+	if len(failedPairs) > 0 {
 		s.log.Warn("some pairs could not be routed",
 			"workload_id", req.WorkloadID,
-			"failed", len(result.FailedPairs),
+			"failed", len(failedPairs),
 		)
 	}
 
@@ -123,11 +163,11 @@ func (s *Server) handlePathRequest(w http.ResponseWriter, r *http.Request) {
 	// affected by gNMI round-trips. Failures are logged but do not change the
 	// HTTP response — the workload remains allocated and the caller can retry
 	// via the /flows endpoint.
-	if len(result.Paths) > 0 {
+	if len(paths) > 0 {
 		// Convert value slice to pointer slice for EncodeFlows.
-		pathPtrs := make([]*graph.Path, len(result.Paths))
-		for i := range result.Paths {
-			p := result.Paths[i]
+		pathPtrs := make([]*graph.Path, len(paths))
+		for i := range paths {
+			p := paths[i]
 			pathPtrs[i] = &p
 		}
 		wlID := req.WorkloadID

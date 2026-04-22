@@ -318,19 +318,25 @@ Done:
   iBGP sessions skipped; eBGP peers keyed as `peer:<RemoteBGPID>_<RemoteIP>` (Jalapeno convention)
 - Multi-domain node keying: `nodeID` incorporates `DomainID` when non-zero;
   VRF-scoped prefix keys reserved for L3VPN ingestion
+- `dst_prefix` / `src_prefix` extension to `POST /paths/request` — GPU→prefix
+  egress and prefix→GPU/service ingress. Resolves CIDR → BGP reachability edge →
+  IGP border node; falls back to OwnershipEdge for locally-originated prefixes.
+  Best path selected by LocalPref↓ then ASPath length↑. `bgp_nexthop` and
+  `prefix_id` returned per PathResult. Requires composite topology (e.g.
+  `"ipv6-graph"`). New file: `internal/pathengine/prefix.go`.
 - `graph.Compose()` + `POST /topology/compose` — merges IGP + peer + prefix source graphs
   into a unified snapshot with BGP session stitching (RouterID join); both `ipv4-graph`
-  and `ipv6-graph` variants supported by choosing the appropriate prefix source
+  and `ipv6-graph` variants supported by choosing the appropriate prefix source;
+  allocation table created on compose so path requests work immediately;
+  duplicate vertex dedup handles both `NSExternalBGP` peer nodes and plain-IP nexthop
+  stubs that shadow existing IGP nodes (both detected via `routerIDToNodeID` index);
+  `BGPReachabilityEdge` SrcIDs rewritten to IGP node ID when source vertex is deduped
 - Executive demo UI (topology graph, workload list, path/SID display, path-request form)
 - All bmpcollector tests passing
 - `scripts/test-local.sh` — local integration test suite (no NATS/BMP required)
 - `test-data/clos-fabric.json` — 4-spine 8-leaf Clos, 32 GPU endpoints (4/leaf)
 
 Roadmap:
-- **End-to-end path with `dst_prefix`** — extend `POST /paths/request` with a
-  `dst_prefix` field; resolves target prefix → egress BGP node → SRv6 path to that
-  node; returns segment list + BGP nexthop. Requires the composite graph to exist.
-  See "Composite graph" section above for full design.
 - **L3VPN / EVPN handler support** — VRF/VPN topology ingestion via BMP;
   VRF-scoped prefix keys already in place (`prefixVertexID` with vrfID)
 - **gNMI ToR southbound** — stub exists; needs `openconfig/gnmi` dependency wired up

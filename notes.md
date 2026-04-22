@@ -1066,3 +1066,54 @@ curl -s -X POST http://$NODE:30080/paths/clos-allreduce-8/complete \
 ```bash
 curl -s -X DELETE http://$NODE:30080/topology/clos-fabric
 ```
+
+# Build ipv6 and ipv6 graphs
+
+ipv6
+```bash
+curl -s -X POST http://localhost:30080/topology/compose \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "topology_id": "ipv6-graph",
+    "sources": ["underlay-v6", "underlay-peers", "underlay-prefixes-v6"]
+  }' | python3 -m json.tool
+```
+
+ipv4
+```bash
+curl -s -X POST http://localhost:30080/topology/compose \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "topology_id": "ipv4-graph",
+    "sources": ["underlay-v6", "underlay-peers", "underlay-prefixes-v4"]
+  }' | python3 -m json.tool
+```
+
+# Ingress and Egress
+Egress (GPU → external prefix):
+
+```bash
+curl -s -X POST http://localhost:30080/paths/request \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "topology_id": "ipv6-graph",
+    "workload_id": "gpu-egress-test",
+    "endpoints": [{"id": "0000.0000.0001"}, {"id": "0000.0000.0002"}],
+    "dst_prefix": "200.0.0.0/8"
+  }' | jq '{paths: [.paths[] | {src: .src_id, dst: .dst_id, bgp_nexthop, prefix_id, segs: .segment_list}]}'
+```
+
+Ingress (external prefix → GPU/service):
+
+```bash
+curl -s -X POST http://localhost:30080/paths/request \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "topology_id": "ipv6-graph",
+    "workload_id": "ingress-test",
+    "endpoints": [{"id": "0000.0000.0001"}],
+    "src_prefix": "200.0.0.0/8"
+  }' | jq .
+```
+
+Each PathResult carries bgp_nexthop (the BGP next-hop the border router uses after SRv6 decap) and prefix_id (the resolved prefix vertex). The segment list terminates at the SRv6 domain edge — the border router.

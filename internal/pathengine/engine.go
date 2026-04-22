@@ -130,6 +130,140 @@ func Compute(
 	return result, nil
 }
 
+// PrefixDirection indicates whether the prefix is a destination (egress) or
+// source (ingress) in a prefix-anchored path request.
+type PrefixDirection int
+
+const (
+	// PrefixDst routes each endpoint → prefix border node (GPU egress).
+	PrefixDst PrefixDirection = iota
+	// PrefixSrc routes prefix border node → each endpoint (external ingress).
+	PrefixSrc
+)
+
+// PrefixComputeResult is the output of ComputePrefixPaths.
+type PrefixComputeResult struct {
+	Paths          []graph.Path
+	FailedPairs    []string
+	PrefixVertexID string // resolved prefix vertex ID, e.g. "pfx:10.0.0.0/8"
+	BGPNexthop     string // BGP next-hop for the external destination (egress only)
+}
+
+// ComputePrefixPaths computes SRv6 paths between a set of endpoints and a
+// single external prefix. It resolves the prefix to its advertising IGP border
+// node, then runs the standard path engine against that node.
+//
+// direction == PrefixDst: each endpoint → border node (egress, GPU to internet).
+// direction == PrefixSrc: border node → each endpoint (ingress, internet to GPU).
+//
+// The segment list returned terminates at the SRv6 domain edge (the border
+// router). For egress paths, the caller should forward packets to BGPNexthop
+// after decapsulation at the border router.
+func ComputePrefixPaths(
+	g *graph.Graph,
+	table *allocation.Table,
+	req apitypes.PathRequest,
+	cidr string,
+	direction PrefixDirection,
+	disjointness string,
+	sharing string,
+) (*PrefixComputeResult, error) {
+	// --- 1. Resolve the prefix to a border node ---------------------------
+	resolution, err := ResolvePrefix(g, cidr)
+	if err != nil {
+		return nil, err
+	}
+
+	// --- 2. Build PathConstraints -----------------------------------------
+	constraints := buildConstraints(req, disjointness)
+
+	// --- 3. Resolve endpoint vertices -------------------------------------
+	resolved, errs := ResolveEndpoints(g, req.Endpoints)
+	if len(errs) > 0 {
+		msgs := make([]string, len(errs))
+		for i, e := range errs {
+			msgs[i] = e.Error()
+		}
+		return nil, fmt.Errorf("endpoint resolution failed: %s", strings.Join(msgs, "; "))
+	}
+	if len(resolved) == 0 {
+		return nil, fmt.Errorf("no endpoints resolved successfully")
+	}
+
+	// --- 4. Build explicit pairs (N endpoints × 1 border node) -----------
+	pairs := make([]PairRequest, 0, len(resolved))
+	for _, ep := range resolved {
+		if direction == PrefixDst {
+			pairs = append(pairs, PairRequest{
+				SrcEndpointID: ep.EndpointID,
+				DstEndpointID: resolution.PrefixVertexID,
+				SrcNodeID:     ep.NodeID,
+				DstNodeID:     resolution.NodeID,
+			})
+		} else {
+			pairs = append(pairs, PairRequest{
+				SrcEndpointID: resolution.PrefixVertexID,
+				DstEndpointID: ep.EndpointID,
+				SrcNodeID:     resolution.NodeID,
+				DstNodeID:     ep.NodeID,
+			})
+		}
+	}
+
+	// --- 5. Compute paths -------------------------------------------------
+	prefix := fmt.Sprintf("%s-%d", req.WorkloadID, time.Now().UnixNano())
+	pairResults := ComputeAllPairs(g, pairs, constraints, req.WorkloadID, prefix, PairingAllDirected)
+
+	// --- 6. Separate successes from failures ------------------------------
+	result := &PrefixComputeResult{
+		PrefixVertexID: resolution.PrefixVertexID,
+		BGPNexthop:     resolution.BGPNexthop,
+	}
+	var successPaths []graph.Path
+
+	for _, pr := range pairResults {
+		if pr.Err != nil {
+			result.FailedPairs = append(result.FailedPairs, pr.Err.Error())
+			continue
+		}
+		successPaths = append(successPaths, pr.Pair)
+	}
+
+	// --- 7. Allocate successful paths in the state table ------------------
+	sharingPolicy := graph.SharingExclusive
+	if sharing == string(graph.SharingAllowed) {
+		sharingPolicy = graph.SharingAllowed
+	}
+
+	wl := &allocation.WorkloadAllocation{
+		WorkloadID:   req.WorkloadID,
+		TopologyID:   req.TopologyID,
+		Sharing:      sharingPolicy,
+		Disjointness: constraints.Disjointness,
+	}
+	if req.LeaseDuration > 0 {
+		d := time.Duration(req.LeaseDuration) * time.Second
+		wl.LeaseDuration = d
+		wl.LeaseExpires = time.Now().Add(d)
+	}
+
+	pathIDs := make([]string, len(successPaths))
+	for i, p := range successPaths {
+		cp := p
+		table.RegisterPath(&cp)
+		pathIDs[i] = cp.ID
+	}
+
+	if len(pathIDs) > 0 {
+		if err := table.AllocatePaths(wl, pathIDs); err != nil {
+			return nil, fmt.Errorf("allocation failed: %w", err)
+		}
+	}
+
+	result.Paths = successPaths
+	return result, nil
+}
+
 // buildConstraints converts a PathRequest into a graph.PathConstraints.
 func buildConstraints(req apitypes.PathRequest, disjointness string) graph.PathConstraints {
 	c := graph.PathConstraints{
