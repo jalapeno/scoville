@@ -1,0 +1,10 @@
+[xrd_routers]
+# Add router management IPs here, one per line. Example:
+# 192.168.100.1
+# 192.168.100.2
+
+[xrd_routers:vars]
+ansible_user=cisco
+ansible_password=cisco123
+ansible_network_os=cisco.iosxr.iosxr
+ansible_connection=network_cli

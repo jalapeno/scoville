@@ -1,0 +1,17 @@
+# ansible-playbook -i test-data/ansible/hosts test-data/ansible/clear-bgp.yml
+
+---
+- name: Clear BGP sessions on XRd routers
+  hosts: xrd_routers
+  gather_facts: false
+
+  tasks:
+    - name: Clear all BGP sessions
+      cisco.iosxr.iosxr_command:
+        commands:
+          - clear bgp *
+      register: result
+
+    - name: Show result
+      debug:
+        var: result.stdout_lines

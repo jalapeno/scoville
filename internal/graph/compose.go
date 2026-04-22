@@ -12,32 +12,36 @@ package graph
 // graph.Node.RouterID — every IGP-derived node stores its BGP router-ID there,
 // providing the cross-namespace join key.
 //
-// # Duplicate peer deduplication
+// # Duplicate vertex deduplication
 //
-// Nodes that appear in both the IGP domain and as eBGP peers produce two
-// vertices: one IGP node (IS-IS system ID key) and one NSExternalBGP peer
-// node (peer:<RID>_<IP> key). When composing, we detect these duplicates by
-// checking if the peer node's RouterID already maps to an IGP node. Duplicate
-// peer vertices are skipped; BGPReachabilityEdges that originated from the
-// duplicate peer vertex are rewritten to use the IGP node ID as SrcID so
-// reachability information is preserved.
+// Two kinds of stub vertices can duplicate an IGP node in a composite graph:
+//
+//  1. NSExternalBGP peer nodes — created when an eBGP session is seen from a
+//     router that is also in the IGP domain. Their RouterID matches an IGP
+//     node's RouterID (e.g. peer:10.0.0.6_10.6.6.2 duplicates xrd06).
+//
+//  2. Nexthop stub nodes — created by the unicast prefix handler's fallback
+//     path when no peer spec is available. Their ID IS the nexthop IP address
+//     (e.g. "10.0.0.6"), which equals the RouterID of the corresponding IGP
+//     node.
+//
+// Both cases are detected by checking the routerIDToNodeID index: if a
+// vertex's own ID appears as a RouterID key, or if its RouterID maps to an
+// IGP node, the vertex is a duplicate. Duplicate vertices are skipped in
+// pass 1; BGPReachabilityEdges that reference them have their SrcID rewritten
+// to the IGP node ID so reachability is preserved.
 //
 // # Algorithm
 //
 //  1. Build a RouterID → nodeID secondary index from all VTNode vertices
 //     across all source graphs (IGP nodes only; NSExternalBGP nodes excluded).
-//  2. Build a peerVertexID → igpNodeID dedup index for external BGP peer nodes
-//     whose RouterID already appears in the RouterID index.
-//  3. Pass 1 — copy all vertices from all sources in order, skipping
-//     NSExternalBGP nodes that are covered by an IGP node (dedup index).
-//  4. Pass 2 — copy all edges from all sources in order:
-//     - ETBGPSession edges have their SrcID rewritten from LocalBGPID to the
-//       matched IGP node ID; dropped if the local end cannot be resolved.
-//     - ETBGPReachability edges have their SrcID rewritten from the peer
-//       vertex ID to the IGP node ID when the peer was a dedup (so reachability
-//       edges remain connected even after the peer vertex is dropped).
-//     - All other edge types are copied verbatim; failures (missing vertex) are
-//       silently skipped.
+//  2. Build a dupVertexID → igpNodeID map covering both kinds of duplicates.
+//  3. Pass 1 — copy all vertices, skipping vertices in the dedup map.
+//  4. Pass 2 — copy all edges:
+//     - ETBGPSession: rewrite SrcID from LocalBGPID to IGP node ID; drop if
+//       unresolvable.
+//     - ETBGPReachability: rewrite SrcID if the source vertex was a duplicate.
+//     - All other types: copy verbatim; silently skip if vertices missing.
 //
 // # Staleness
 //
@@ -49,18 +53,14 @@ func Compose(id string, sources ...*Graph) *Graph {
 
 	// --- build RouterID → nodeID index (IGP nodes only) -------------------
 	// RouterID is the BGP loopback IP stored on IGP-derived Node vertices.
-	// LocalBGPID in peer session messages equals this value, enabling the
-	// stitch from the peer graph's SrcID onto the IGP graph's node ID.
-	// NSExternalBGP nodes are excluded so a peer node for 10.0.0.6 doesn't
+	// NSExternalBGP nodes are excluded so a peer vertex for 10.0.0.6 doesn't
 	// shadow the IGP node for 0000.0000.0006 in the index.
 	routerIDToNodeID := make(map[string]string)
 	for _, src := range sources {
 		src.mu.RLock()
 		for _, v := range src.vertices {
 			if n, ok := v.(*Node); ok && n.RouterID != "" && n.Subtype != NSExternalBGP {
-				// Only store IGP-derived nodes: their ID is an IS-IS system ID,
-				// not an IP address. Skip if ID == RouterID (that would be a
-				// BGP-only stub, not an IGP node).
+				// Skip stubs where ID == RouterID (IP-addressed, not an IGP node).
 				if n.ID != n.RouterID {
 					routerIDToNodeID[n.RouterID] = n.ID
 				}
@@ -69,38 +69,48 @@ func Compose(id string, sources ...*Graph) *Graph {
 		src.mu.RUnlock()
 	}
 
-	// --- build peerVertexID → igpNodeID dedup index -----------------------
-	// Any NSExternalBGP peer node whose RouterID maps to a known IGP node is
-	// a duplicate — the same physical router appears in both the IGP and BGP
-	// peer graphs. We skip the peer vertex and rewrite edges that reference it.
-	peerIDToIGPID := make(map[string]string)
+	// --- build dupVertexID → igpNodeID dedup map --------------------------
+	// Covers two cases:
+	//   a) NSExternalBGP peer node whose RouterID maps to a known IGP node
+	//      (e.g. "peer:10.0.0.6_10.6.6.2" → "0000.0000.0006")
+	//   b) Nexthop stub node whose plain-IP ID equals a known RouterID
+	//      (e.g. "10.0.0.6" → "0000.0000.0006")
+	dupVertexToIGPID := make(map[string]string)
 	for _, src := range sources {
 		src.mu.RLock()
 		for _, v := range src.vertices {
-			if n, ok := v.(*Node); ok && n.Subtype == NSExternalBGP && n.RouterID != "" {
+			n, ok := v.(*Node)
+			if !ok {
+				continue
+			}
+			// Case (a): NSExternalBGP peer whose RouterID is a known IGP RouterID.
+			if n.Subtype == NSExternalBGP && n.RouterID != "" {
 				if igpID, exists := routerIDToNodeID[n.RouterID]; exists {
-					peerIDToIGPID[n.ID] = igpID
+					dupVertexToIGPID[n.ID] = igpID
 				}
+				continue
+			}
+			// Case (b): stub node whose own ID is a known RouterID (plain IP stub).
+			if igpID, exists := routerIDToNodeID[n.ID]; exists {
+				dupVertexToIGPID[n.ID] = igpID
 			}
 		}
 		src.mu.RUnlock()
 	}
 
-	// --- pass 1: copy all vertices, skipping duplicate peer nodes ----------
+	// --- pass 1: copy all vertices, skipping duplicates -------------------
 	for _, src := range sources {
 		src.mu.RLock()
 		for _, v := range src.vertices {
-			if n, ok := v.(*Node); ok && n.Subtype == NSExternalBGP {
-				if _, isDup := peerIDToIGPID[n.ID]; isDup {
-					continue // IGP node already represents this router
-				}
+			if _, isDup := dupVertexToIGPID[v.GetID()]; isDup {
+				continue
 			}
 			_ = out.AddVertex(v)
 		}
 		src.mu.RUnlock()
 	}
 
-	// --- pass 2: copy all edges, stitching BGP sessions and dedup peers ----
+	// --- pass 2: copy all edges, stitching BGP sessions and dedup peers ---
 	for _, src := range sources {
 		src.mu.RLock()
 		for _, e := range src.edges {
@@ -114,14 +124,12 @@ func Compose(id string, sources ...*Graph) *Graph {
 				}
 				rewritten := *typed
 				rewritten.SrcID = igpID
-				// Rekey the edge so it doesn't collide if the same session
-				// appears in multiple sources.
 				rewritten.ID = "bgpsess:" + igpID + ":" + typed.RemoteIP
 				_ = out.AddEdge(&rewritten)
 			case *BGPReachabilityEdge:
-				// If the source peer vertex was deduplicated onto an IGP node,
-				// rewrite SrcID so the reachability edge remains connected.
-				if igpID, isDup := peerIDToIGPID[typed.SrcID]; isDup {
+				// If the source vertex was a duplicate, rewrite SrcID to the
+				// IGP node ID so reachability edges remain connected.
+				if igpID, isDup := dupVertexToIGPID[typed.SrcID]; isDup {
 					rewritten := *typed
 					rewritten.SrcID = igpID
 					rewritten.ID = "bgpreach:" + igpID + ":" + typed.DstID
