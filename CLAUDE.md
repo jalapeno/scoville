@@ -184,22 +184,24 @@ graph, the rules are:
 |-------------|-----------|-------|
 | Node (IGP) | `<IGPRouterID>` | plain when `DomainID==0` (single domain) |
 | Node (IGP, multi-domain) | `<DomainID>:<IGPRouterID>` | e.g. `65536:0000.0000.0006` |
-| Node (external BGP peer) | `peer:<RemoteBGPID>_<RemoteIP>` | Jalapeno convention |
+| Node (external BGP peer) | `peer:<RemoteBGPID>_<RemoteASN>` | one vertex per physical router; Jalapeno convention |
 | Node (nexthop stub) | `nh:<ip>` | internal to prefix graphs |
 | Interface | `iface:<nodeID>/<linkIP>` or `iface:<nodeID>/<linkNum>` | |
 | Prefix (default VRF) | `pfx:<ip>/<len>` | e.g. `pfx:10.0.0.0/8` |
 | Prefix (VRF-scoped) | `pfx:<vrfID>:<ip>/<len>` | reserved for L3VPN |
 | LinkEdge | `link:<srcNodeID>:<dstNodeID>:<localLinkIP>` | |
-| BGPSessionEdge | `bgpsess:<LocalBGPID>:<RemoteIP>` | |
+| BGPSessionEdge | `bgpsess:<LocalBGPID>:<RemoteIP>` | one edge per session; multiple edges may share same src/dst vertices (IPv4+IPv6) |
 | BGPReachabilityEdge | `bgpreach:<peerVertexID>:<pfxVertexID>` | |
 | OwnershipEdge | `own:<ifaceID>-><nodeID>` or `pfxown:<pfxID>:<nhID>` | |
 
-**Cross-graph stitching (composite graph):** BGP peer sessions use `LocalBGPID`
+**Cross-graph stitching (composite graph):** BGP session edges use `LocalBGPID`
 (a BGP router ID, e.g. `10.0.0.6`) as `SrcID`, while IGP nodes are keyed by
 IS-IS system ID (e.g. `0000.0000.0006`). The stitching key is `graph.Node.RouterID`
 which stores the BGP router ID on every IGP node vertex. When composing graphs,
-scan `underlay-v6` nodes to build a `RouterID → nodeID` map and rewrite BGP
-session edge `SrcID` values before insertion.
+scan source graph nodes to build a `RouterID → nodeID` map and rewrite BGP
+session edge `SrcID` values before insertion. External peer nodes are keyed
+`peer:<RemoteBGPID>_<RemoteASN>` — one vertex per physical router — with
+individual IPv4/IPv6 sessions as separate `BGPSessionEdge` instances.
 
 **XRd testbed:** all nodes have `DomainID=0` — node IDs are plain IS-IS system
 IDs and match existing curl examples and API references unchanged.

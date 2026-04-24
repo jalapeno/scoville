@@ -110,11 +110,13 @@ func prefixOwnerEdgeID(pfxID, nhID string) string {
 	return "pfxown:" + pfxID + ":" + nhID
 }
 
-// externalPeerNodeID returns the vertex ID for an external BGP peer.
-// Format mirrors Jalapeno's peer key: "<RemoteBGPID>_<RemoteIP>", prefixed
-// with "peer:" to avoid collisions with IGP-derived node IDs.
-func externalPeerNodeID(remoteBGPID, remoteIP string) string {
-	return "peer:" + remoteBGPID + "_" + remoteIP
+// externalPeerNodeID returns the vertex ID for an external BGP peer router.
+// Keyed by "<RemoteBGPID>_<RemoteASN>" (Jalapeno convention) so that a single
+// physical router with multiple peering sessions (IPv4 + IPv6, multiple
+// uplinks) maps to exactly one vertex. Individual sessions are modelled as
+// separate BGPSessionEdges pointing to this vertex.
+func externalPeerNodeID(remoteBGPID string, remoteASN uint32) string {
+	return fmt.Sprintf("peer:%s_%d", remoteBGPID, remoteASN)
 }
 
 // bgpReachEdgeID returns the deterministic edge ID for a BGPReachabilityEdge.
@@ -443,12 +445,12 @@ func translateUnicastPrefix(msg *gobmpmsg.UnicastPrefix) (pfx *graph.Prefix, nh 
 
 // translateExternalPeerNode builds a graph.Node vertex for an eBGP peer that
 // lies outside the local IGP domain. The vertex is keyed by
-// externalPeerNodeID(RemoteBGPID, RemoteIP) so it is stable across session
-// flaps.
+// externalPeerNodeID(RemoteBGPID, RemoteASN) — one vertex per physical router
+// regardless of how many peering sessions (address families, uplinks) it has.
 func translateExternalPeerNode(msg *gobmpmsg.PeerStateChange) *graph.Node {
 	return &graph.Node{
 		BaseVertex: graph.BaseVertex{
-			ID:   externalPeerNodeID(msg.RemoteBGPID, msg.RemoteIP),
+			ID:   externalPeerNodeID(msg.RemoteBGPID, msg.RemoteASN),
 			Type: graph.VTNode,
 		},
 		Subtype:       graph.NSExternalBGP,
@@ -624,13 +626,16 @@ func (h *peerHandler) Handle(data []byte, store *graph.Store) error {
 
 	g := h.updater.EnsureGraph(store, h.topoID)
 
-	// Build the external peer vertex and register it in the Updater's index
-	// so that unicastPrefixHandler can anchor external prefixes to it.
+	// Build the consolidated peer vertex (one per physical router, keyed by
+	// BGPID+ASN) and register this session's RemoteIP in the Updater's index
+	// so that unicastPrefixHandler can anchor prefixes to the correct vertex
+	// regardless of which session (IPv4/IPv6) carried the prefix update.
 	peerNode := translateExternalPeerNode(&msg)
 	h.updater.RegisterPeerSpec(msg.RemoteIP, peerNode)
 
-	// Build and upsert the BGP session edge using the peer vertex ID as DstID
-	// so the edge connects to the proper named vertex (not an anonymous IP stub).
+	// Session edge: keyed by localBGPID+remoteIP so IPv4 and IPv6 sessions
+	// between the same two routers remain distinct edges, both pointing at the
+	// single consolidated peer vertex.
 	sess := &graph.BGPSessionEdge{
 		BaseEdge: graph.BaseEdge{
 			ID:       peerEdgeID(msg.LocalBGPID, msg.RemoteIP),
