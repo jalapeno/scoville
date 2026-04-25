@@ -98,28 +98,12 @@ func Compose(id string, sources ...*Graph) *Graph {
 		src.mu.RUnlock()
 	}
 
-	// --- pass 1: copy all vertices, skipping duplicates and orphan stubs ----
+	// --- pass 1: copy all vertices, skipping duplicates -------------------
 	for _, src := range sources {
 		src.mu.RLock()
 		for _, v := range src.vertices {
 			if _, isDup := dupVertexToIGPID[v.GetID()]; isDup {
 				continue
-			}
-			// Skip plain stub nodes: no RouterID and no Subtype means the vertex
-			// was created solely to satisfy edge vertex-existence checks (e.g. by
-			// UpsertBGPSession for LocalBGPID, or EnsureNode for link stubs).
-			// In the composed graph these become either:
-			//   (a) redundant — the same router already exists as a full IGP node
-			//       from the underlay source (fabric-side BGP ID stubs), or
-			//   (b) orphans — LocalBGPID stubs from external routers that are the
-			//       BMP monitoring source; their session edges get dropped by the
-			//       stitching logic so they have no meaningful connectivity.
-			// Exception: "nh:" nexthop stubs are kept because ResolvePrefix uses
-			// them as a fallback when no eBGP peer match exists for a prefix.
-			if n, ok := v.(*Node); ok && n.RouterID == "" && string(n.Subtype) == "" {
-				if len(n.ID) < 3 || n.ID[:3] != "nh:" {
-					continue
-				}
 			}
 			_ = out.AddVertex(v)
 		}
