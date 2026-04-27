@@ -118,8 +118,18 @@ func externalPeerNodeID(remoteBGPID, remoteIP string) string {
 }
 
 // bgpReachEdgeID returns the deterministic edge ID for a BGPReachabilityEdge.
-func bgpReachEdgeID(peerID, pfxID string) string {
-	return "bgpreach:" + peerID + ":" + pfxID
+// One edge per prefix: the best-path peer's edge wins; the peer ID is NOT part
+// of the key so that a better-path arrival can overwrite a prior entry.
+func bgpReachEdgeID(pfxID string) string {
+	return "bgpreach:" + pfxID
+}
+
+// isStrictlyBetterASPath reports whether newReach has a strictly shorter AS
+// path than existingReach. Equal-length paths keep the existing edge (stable
+// selection — first writer wins on tie). LocalPref and MED are intentionally
+// excluded: they are BGP router policy and should not influence graph topology.
+func isStrictlyBetterASPath(newReach, existingReach *graph.BGPReachabilityEdge) bool {
+	return len(newReach.ASPath) < len(existingReach.ASPath)
 }
 
 // --- Behavior code mapping ---------------------------------------------------
@@ -465,7 +475,7 @@ func translateExternalPeerNode(msg *gobmpmsg.PeerStateChange) *graph.Node {
 func translateBGPReachability(peerID, pfxID string, msg *gobmpmsg.UnicastPrefix) *graph.BGPReachabilityEdge {
 	reach := &graph.BGPReachabilityEdge{
 		BaseEdge: graph.BaseEdge{
-			ID:       bgpReachEdgeID(peerID, pfxID),
+			ID:       bgpReachEdgeID(pfxID),
 			Type:     graph.ETBGPReachability,
 			SrcID:    peerID,
 			DstID:    pfxID,
@@ -700,10 +710,29 @@ func (h *unicastPrefixHandler) Handle(data []byte, store *graph.Store) error {
 	if peerSpec := peerSpecForPrefix; peerSpec != nil {
 		pfx, _, _ := translateUnicastPrefix(&msg)
 		reach := translateBGPReachability(peerSpec.ID, pfxID, &msg)
+		edgeID := bgpReachEdgeID(pfxID)
+
 		if msg.Action == "del" {
-			h.updater.RemoveEdge(g, reach.GetID())
+			// Only remove the best-path edge if this peer currently holds it.
+			// If a better-path peer already replaced this peer's edge, the del
+			// is a no-op: the best-path edge from the other peer remains.
+			if existing := g.GetEdge(edgeID); existing != nil && existing.GetSrcID() == peerSpec.ID {
+				h.updater.RemoveEdge(g, edgeID)
+			}
 			return nil
 		}
+
+		// Best-path selection: only replace the existing edge if the new
+		// arrival has a strictly shorter AS path. Equal or longer AS paths
+		// keep the current edge (first writer wins on tie).
+		if existing := g.GetEdge(edgeID); existing != nil {
+			if existingReach, ok := existing.(*graph.BGPReachabilityEdge); ok {
+				if !isStrictlyBetterASPath(reach, existingReach) {
+					return nil // existing path is at least as good; skip
+				}
+			}
+		}
+
 		h.updater.UpsertBGPReachability(g, pfx, peerSpec, reach)
 		return nil
 	}

@@ -132,7 +132,7 @@ func Compose(id string, sources ...*Graph) *Graph {
 				if igpID, isDup := dupVertexToIGPID[typed.SrcID]; isDup {
 					rewritten := *typed
 					rewritten.SrcID = igpID
-					rewritten.ID = "bgpreach:" + igpID + ":" + typed.DstID
+					rewritten.ID = "bgpreach:" + typed.DstID
 					_ = out.AddEdge(&rewritten)
 				} else {
 					_ = out.AddEdge(e)

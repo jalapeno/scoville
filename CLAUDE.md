@@ -191,7 +191,7 @@ graph, the rules are:
 | Prefix (VRF-scoped) | `pfx:<vrfID>:<ip>/<len>` | reserved for L3VPN |
 | LinkEdge | `link:<srcNodeID>:<dstNodeID>:<localLinkIP>` | |
 | BGPSessionEdge | `bgpsess:<LocalBGPID>:<RemoteIP>` | |
-| BGPReachabilityEdge | `bgpreach:<peerVertexID>:<pfxVertexID>` | |
+| BGPReachabilityEdge | `bgpreach:<pfxVertexID>` | One per prefix; best-path (shortest AS path) peer wins |
 | OwnershipEdge | `own:<ifaceID>-><nodeID>` or `pfxown:<pfxID>:<nhID>` | |
 
 **Cross-graph stitching (composite graph):** BGP peer sessions use `LocalBGPID`
@@ -333,6 +333,12 @@ Done:
 - `lsNodeHandler` always mirrors nodes to v4 companion graph via `EnsureGraph` (not
   conditional on v4 graph pre-existing), so v4 nodes have `RouterID` regardless of
   NATS message replay order — fixes ipv4-graph BGP session stitching
+- DC prefix best-path selection: `BGPReachabilityEdge` key changed from
+  `bgpreach:<peerID>:<pfxID>` to `bgpreach:<pfxID>` (one edge per prefix). On each BMP
+  add, if an existing edge for the prefix already exists with a shorter or equal AS path,
+  the new arrival is discarded (first writer wins on tie). On BMP del, the edge is only
+  removed if the withdrawing peer currently holds the best-path edge. LocalPref/MED
+  excluded from selection — AS path length only (structural proximity, not router policy).
 - Peer vertex consolidation deferred: `peer:<RemoteBGPID>_<RemoteIP>` keying retained
   (Jalapeno convention); `peer:<RemoteBGPID>_<ASN>` keying is the correct long-term
   approach but was reverted to avoid UI regression; re-apply with coordinated UI testing
