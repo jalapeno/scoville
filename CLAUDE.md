@@ -184,7 +184,7 @@ graph, the rules are:
 |-------------|-----------|-------|
 | Node (IGP) | `<IGPRouterID>` | plain when `DomainID==0` (single domain) |
 | Node (IGP, multi-domain) | `<DomainID>:<IGPRouterID>` | e.g. `65536:0000.0000.0006` |
-| Node (external BGP peer) | `peer:<RemoteBGPID>_<RemoteIP>` | Jalapeno convention |
+| Node (external BGP peer) | `peer:<RemoteBGPID>` | one vertex per physical router, shared across all sessions |
 | Node (nexthop stub) | `nh:<ip>` | internal to prefix graphs |
 | Interface | `iface:<nodeID>/<linkIP>` or `iface:<nodeID>/<linkNum>` | |
 | Prefix (default VRF) | `pfx:<ip>/<len>` | e.g. `pfx:10.0.0.0/8` |
@@ -195,11 +195,17 @@ graph, the rules are:
 | OwnershipEdge | `own:<ifaceID>-><nodeID>` or `pfxown:<pfxID>:<nhID>` | |
 
 **Cross-graph stitching (composite graph):** BGP peer sessions use `LocalBGPID`
-(a BGP router ID, e.g. `10.0.0.6`) as `SrcID`, while IGP nodes are keyed by
-IS-IS system ID (e.g. `0000.0000.0006`). The stitching key is `graph.Node.RouterID`
-which stores the BGP router ID on every IGP node vertex. When composing graphs,
-scan `underlay-v6` nodes to build a `RouterID → nodeID` map and rewrite BGP
-session edge `SrcID` values before insertion.
+(a BGP router ID, e.g. `10.0.0.6`) as `SrcID`. Two strategies are tried in order:
+
+1. **IS-IS stitching**: if `LocalBGPID` maps to an IGP node via the
+   `RouterID → nodeID` index, rewrite `SrcID` to the IS-IS system ID
+   (e.g. `0000.0000.0006`). Handles ASBRs and other IS-IS-attached routers.
+
+2. **Peer-vertex stitching**: if `peer:<LocalBGPID>` exists in the composed
+   graph, rewrite `SrcID` to that vertex. Handles DC-only BGP routers
+   (tier-2/1/0 nodes) that run BMP but have no IGP adjacency.
+
+Edges that match neither strategy are dropped (unresolvable startup stubs).
 
 **XRd testbed:** all nodes have `DomainID=0` — node IDs are plain IS-IS system
 IDs and match existing curl examples and API references unchanged.
@@ -309,7 +315,7 @@ Done:
 - BMP peer message integration (BGP session topology layer, `underlay-peers` graph)
 - BMP unicast prefix integration (IPv4/IPv6 prefix→node mapping, `underlay-prefixes-v4/v6`)
 - External BGP peer vertices (`NSExternalBGP`) with `BGPReachabilityEdge` to prefix vertices;
-  iBGP sessions skipped; eBGP peers keyed as `peer:<RemoteBGPID>_<RemoteIP>` (Jalapeno convention)
+  iBGP sessions skipped; eBGP peers keyed as `peer:<RemoteBGPID>` (one vertex per physical router)
 - Multi-domain node keying: `nodeID` incorporates `DomainID` when non-zero;
   VRF-scoped prefix keys reserved for L3VPN ingestion
 - `dst_prefix` / `src_prefix` extension to `POST /paths/request` — GPU→prefix
@@ -333,9 +339,9 @@ Done:
 - `lsNodeHandler` always mirrors nodes to v4 companion graph via `EnsureGraph` (not
   conditional on v4 graph pre-existing), so v4 nodes have `RouterID` regardless of
   NATS message replay order — fixes ipv4-graph BGP session stitching
-- Peer vertex consolidation deferred: `peer:<RemoteBGPID>_<RemoteIP>` keying retained
-  (Jalapeno convention); `peer:<RemoteBGPID>_<ASN>` keying is the correct long-term
-  approach but was reverted to avoid UI regression; re-apply with coordinated UI testing
+- Peer vertex consolidation: `peer:<RemoteBGPID>` keying (one vertex per physical router);
+  compose stitching extended with peer-vertex fallback so DC-only BGP routers
+  (tier-2/1/0) appear in composed graphs without IS-IS adjacency requirement
 - Executive demo UI (topology graph, workload list, path/SID display, path-request form)
 - `scripts/test-local.sh` — local integration test suite (no NATS/BMP required)
 - `test-data/clos-fabric.json` — 4-spine 8-leaf Clos, 32 GPU endpoints (4/leaf);
