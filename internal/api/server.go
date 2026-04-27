@@ -90,27 +90,19 @@ type ComposeRecipe struct {
 
 // StartAutoCompose launches a background goroutine that watches the source
 // graphs named in each recipe and re-composes the target whenever any source
-// version changes after a stability window has elapsed with no further writes.
-// The stability window prevents composing mid-convergence during BGP storms
-// (e.g. after a full clear-bgp): the first compose is deferred until the
-// source graphs have been quiescent for at least stabilityWindow.
-//
-// The goroutine exits when ctx is cancelled.
-func (s *Server) StartAutoCompose(ctx context.Context, recipes []ComposeRecipe, stabilityWindow time.Duration) {
+// version changes. It also composes immediately on first call (once all sources
+// are present). The goroutine exits when ctx is cancelled.
+func (s *Server) StartAutoCompose(ctx context.Context, recipes []ComposeRecipe) {
 	for _, r := range recipes {
-		go s.autoComposeLoop(ctx, r, stabilityWindow)
+		go s.autoComposeLoop(ctx, r)
 	}
 }
 
-func (s *Server) autoComposeLoop(ctx context.Context, recipe ComposeRecipe, stabilityWindow time.Duration) {
+func (s *Server) autoComposeLoop(ctx context.Context, recipe ComposeRecipe) {
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
 
-	var (
-		lastVersionSum int64
-		composedSum    int64
-		lastChangeTime time.Time
-	)
+	var lastVersionSum int64
 
 	for {
 		select {
@@ -141,23 +133,11 @@ func (s *Server) autoComposeLoop(ctx context.Context, recipe ComposeRecipe, stab
 			continue
 		}
 
-		// Track when the version last changed so we can enforce a stability
-		// window: don't compose while the sources are still churning.
-		if versionSum != lastVersionSum {
-			lastVersionSum = versionSum
-			lastChangeTime = time.Now()
-			continue // version just changed; restart the stability clock
+		// Only recompose when something changed.
+		if versionSum == lastVersionSum {
+			continue
 		}
-
-		// Version is stable — but only compose if we haven't already composed
-		// this version and the stability window has elapsed.
-		if versionSum == composedSum {
-			continue // already up to date
-		}
-		if !lastChangeTime.IsZero() && time.Since(lastChangeTime) < stabilityWindow {
-			continue // still within the hold-down window
-		}
-		composedSum = versionSum
+		lastVersionSum = versionSum
 
 		composed := graph.Compose(recipe.TargetID, sources...)
 		s.store.Put(composed)

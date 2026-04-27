@@ -191,7 +191,7 @@ graph, the rules are:
 | Prefix (VRF-scoped) | `pfx:<vrfID>:<ip>/<len>` | reserved for L3VPN |
 | LinkEdge | `link:<srcNodeID>:<dstNodeID>:<localLinkIP>` | |
 | BGPSessionEdge | `bgpsess:<LocalBGPID>:<RemoteIP>` | |
-| BGPReachabilityEdge | `bgpreach:<pfxVertexID>` | One per prefix; best-path (shortest AS path) peer wins |
+| BGPReachabilityEdge | `bgpreach:<peerVertexID>:<pfxVertexID>` | |
 | OwnershipEdge | `own:<ifaceID>-><nodeID>` or `pfxown:<pfxID>:<nhID>` | |
 
 **Cross-graph stitching (composite graph):** BGP peer sessions use `LocalBGPID`
@@ -333,21 +333,6 @@ Done:
 - `lsNodeHandler` always mirrors nodes to v4 companion graph via `EnsureGraph` (not
   conditional on v4 graph pre-existing), so v4 nodes have `RouterID` regardless of
   NATS message replay order — fixes ipv4-graph BGP session stitching
-- DC prefix best-path selection: `BGPReachabilityEdge` key changed from
-  `bgpreach:<peerID>:<pfxID>` to `bgpreach:<pfxID>` (one edge per prefix). On each BMP
-  add, if an existing edge for the prefix already exists with a shorter or equal AS path,
-  the new arrival is discarded (first writer wins on tie). On BMP del, the edge is only
-  removed if the withdrawing peer currently holds the best-path edge. LocalPref/MED
-  excluded from selection — AS path length only (structural proximity, not router policy).
-- Stale stub ownership edge cleanup: when a `unicast_prefix` message arrives before the
-  corresponding `peer_state_change` has populated peerSpecs, the prefix falls back to an
-  `OwnershipEdge(pfxID → nh:<ip>)` stub. Once a peer IS known, any such stale stub edges
-  on the prefix are evicted before upserting the BGPReachabilityEdge — fixes "incorrect
-  connections" visible in the composed graph after BGP convergence storms.
-- Auto-compose stability window (`--compose-hold-down`, default 15s): composed graphs
-  (ipv4-graph, ipv6-graph) are only rebuilt after the source graphs have been quiescent
-  for this duration. Prevents mid-convergence snapshots during a BGP clear-bgp storm.
-  Set to 0 to restore the old fire-on-every-change behavior.
 - Peer vertex consolidation deferred: `peer:<RemoteBGPID>_<RemoteIP>` keying retained
   (Jalapeno convention); `peer:<RemoteBGPID>_<ASN>` keying is the correct long-term
   approach but was reverted to avoid UI regression; re-apply with coordinated UI testing

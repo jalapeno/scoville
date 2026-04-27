@@ -118,18 +118,8 @@ func externalPeerNodeID(remoteBGPID, remoteIP string) string {
 }
 
 // bgpReachEdgeID returns the deterministic edge ID for a BGPReachabilityEdge.
-// One edge per prefix: the best-path peer's edge wins; the peer ID is NOT part
-// of the key so that a better-path arrival can overwrite a prior entry.
-func bgpReachEdgeID(pfxID string) string {
-	return "bgpreach:" + pfxID
-}
-
-// isStrictlyBetterASPath reports whether newReach has a strictly shorter AS
-// path than existingReach. Equal-length paths keep the existing edge (stable
-// selection — first writer wins on tie). LocalPref and MED are intentionally
-// excluded: they are BGP router policy and should not influence graph topology.
-func isStrictlyBetterASPath(newReach, existingReach *graph.BGPReachabilityEdge) bool {
-	return len(newReach.ASPath) < len(existingReach.ASPath)
+func bgpReachEdgeID(peerID, pfxID string) string {
+	return "bgpreach:" + peerID + ":" + pfxID
 }
 
 // --- Behavior code mapping ---------------------------------------------------
@@ -475,7 +465,7 @@ func translateExternalPeerNode(msg *gobmpmsg.PeerStateChange) *graph.Node {
 func translateBGPReachability(peerID, pfxID string, msg *gobmpmsg.UnicastPrefix) *graph.BGPReachabilityEdge {
 	reach := &graph.BGPReachabilityEdge{
 		BaseEdge: graph.BaseEdge{
-			ID:       bgpReachEdgeID(pfxID),
+			ID:       bgpReachEdgeID(peerID, pfxID),
 			Type:     graph.ETBGPReachability,
 			SrcID:    peerID,
 			DstID:    pfxID,
@@ -710,42 +700,10 @@ func (h *unicastPrefixHandler) Handle(data []byte, store *graph.Store) error {
 	if peerSpec := peerSpecForPrefix; peerSpec != nil {
 		pfx, _, _ := translateUnicastPrefix(&msg)
 		reach := translateBGPReachability(peerSpec.ID, pfxID, &msg)
-		edgeID := bgpReachEdgeID(pfxID)
-
 		if msg.Action == "del" {
-			// Only remove the best-path edge if this peer currently holds it.
-			// If a better-path peer already replaced this peer's edge, the del
-			// is a no-op: the best-path edge from the other peer remains.
-			if existing := g.GetEdge(edgeID); existing != nil && existing.GetSrcID() == peerSpec.ID {
-				h.updater.RemoveEdge(g, edgeID)
-			}
+			h.updater.RemoveEdge(g, reach.GetID())
 			return nil
 		}
-
-		// Evict any stale stub ownership edges left over from the startup race:
-		// if unicast_prefix messages arrived before the corresponding peer
-		// messages populated peerSpecs, those prefixes were modelled as
-		// pfxown:<pfxID>->nh:<ip> stub edges. Now that we have a real peer,
-		// remove those stubs. This runs on every add from a known peer so it
-		// fires opportunistically during BMP replay even if this particular
-		// arrival doesn't win best-path selection.
-		for _, e := range g.OutEdges(pfxID) {
-			if e.GetType() == graph.ETOwnership && strings.HasPrefix(e.GetDstID(), "nh:") {
-				h.updater.RemoveEdge(g, e.GetID())
-			}
-		}
-
-		// Best-path selection: only replace the existing edge if the new
-		// arrival has a strictly shorter AS path. Equal or longer AS paths
-		// keep the current edge (first writer wins on tie).
-		if existing := g.GetEdge(edgeID); existing != nil {
-			if existingReach, ok := existing.(*graph.BGPReachabilityEdge); ok {
-				if !isStrictlyBetterASPath(reach, existingReach) {
-					return nil // existing path is at least as good; skip
-				}
-			}
-		}
-
 		h.updater.UpsertBGPReachability(g, pfx, peerSpec, reach)
 		return nil
 	}
