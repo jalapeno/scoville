@@ -98,12 +98,58 @@ func Compose(id string, sources ...*Graph) *Graph {
 		src.mu.RUnlock()
 	}
 
-	// --- pass 1: copy all vertices, skipping duplicates -------------------
+	// --- pre-compute nh: nodes that have at least one edge -------------------
+	// An nh: nexthop stub with incoming edges is a legitimate ownership target
+	// (a prefix with no known eBGP peer uses it as a fallback for path
+	// resolution). An nh: stub with NO edges is an orphan left over from the
+	// startup race: a prefix arrived before its peerSpec was registered,
+	// creating the stub+OwnershipEdge, then a later message added a real
+	// BGPReachabilityEdge and the OwnershipEdge was removed — but the stub
+	// vertex was never cleaned up. Both are excluded from the composed graph
+	// if they have no edges; kept if they have edges.
+	nhWithEdges := make(map[string]struct{})
+	for _, src := range sources {
+		src.mu.RLock()
+		for _, e := range src.edges {
+			if dst := e.GetDstID(); len(dst) > 3 && dst[:3] == "nh:" {
+				nhWithEdges[dst] = struct{}{}
+			}
+		}
+		src.mu.RUnlock()
+	}
+
+	// --- pass 1: copy all vertices, skipping duplicates and bare stubs -----
 	for _, src := range sources {
 		src.mu.RLock()
 		for _, v := range src.vertices {
 			if _, isDup := dupVertexToIGPID[v.GetID()]; isDup {
 				continue
+			}
+			// Drop plain stub nodes — Node vertices with no RouterID and no
+			// Subtype were auto-created by UpsertBGPSession (LocalBGPID stubs
+			// for the local router) or EnsureNode. In the composed graph they
+			// either duplicate a full IGP node (already handled by dedup above)
+			// or become floating orphans because their BGPSessionEdge is dropped
+			// by the stitching logic (no matching IGP RouterID). Either way they
+			// add noise without contributing connectivity.
+			//
+			// Exception A: nh: nexthop stubs that still have at least one
+			// incoming OwnershipEdge ARE kept — they are the target of the
+			// ResolvePrefix ownership fallback for prefixes with no known eBGP
+			// peer. Orphaned nh: stubs (no edges) are dropped.
+			//
+			// Exception B: NSExternalBGP peer nodes always have a Subtype set,
+			// so they are never matched by this filter.
+			if n, ok := v.(*Node); ok && n.RouterID == "" && string(n.Subtype) == "" {
+				id := n.ID
+				if len(id) >= 3 && id[:3] == "nh:" {
+					// Keep only if it has live edges in a source graph.
+					if _, hasEdge := nhWithEdges[id]; !hasEdge {
+						continue
+					}
+				} else {
+					continue // plain IP stub — always drop
+				}
 			}
 			_ = out.AddVertex(v)
 		}
