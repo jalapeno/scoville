@@ -18,67 +18,81 @@ package graph
 //
 //  1. NSExternalBGP peer nodes — created when an eBGP session is seen from a
 //     router that is also in the IGP domain. Their RouterID matches an IGP
-//     node's RouterID (e.g. peer:10.0.0.6 duplicates xrd06).
+//     node's RouterID (e.g. peer:10.0.0.1 duplicates xrd01).
 //
 //  2. Nexthop stub nodes — created by the unicast prefix handler's fallback
 //     path when no peer spec is available. Their ID IS the nexthop IP address
 //     (e.g. "10.0.0.6"), which equals the RouterID of the corresponding IGP
 //     node.
 //
-// Both cases are detected by checking the routerIDToNodeID index: if a
-// vertex's own ID appears as a RouterID key, or if its RouterID maps to an
-// IGP node, the vertex is a duplicate. Duplicate vertices are skipped in
-// pass 1; BGPReachabilityEdges that reference them have their SrcID rewritten
-// to the IGP node ID so reachability is preserved.
+// Both cases are detected by checking the routerIDToNodeID index. Duplicate
+// vertices are skipped in pass 1; BGPReachabilityEdges that reference them
+// have their SrcID rewritten to the IGP node ID.
 //
 // # BGP best-path selection (one edge per prefix per quality tier)
 //
 // The BMP stream delivers prefix advertisements from every BGP speaker that
-// has the prefix in its RIB, including re-advertisers at every tier. Without
-// filtering, a prefix originated by DC46 arrives with edges from DC42/43,
-// DC40/41, xrd01/02, etc. — creating a dense star rather than a clean origin
-// attachment.
+// has the prefix in its RIB. Without filtering, a prefix originated by DC46
+// arrives with edges from DC42/43, DC40/41, xrd01/02, etc.
 //
 // The pre-pass groups BGPReachabilityEdge candidates per prefix and selects
-// the minimum-quality tier using a simplified BGP decision process:
+// the minimum-quality tier:
 //
-//  1. Shortest AS_PATH — primary filter; eliminates re-advertisers at
-//     higher tiers (longer paths) while retaining all edges at the minimum
-//     length. This preserves multi-homed prefixes: a prefix reachable via
-//     two ASBR peers (both with AS_PATH length 1) keeps an edge to each.
-//  2. Highest LocalPref — tiebreak within the minimum length group.
+//  1. Shortest AS_PATH — eliminates re-advertisers at higher tiers while
+//     retaining all peers at the same tier (preserves multi-homed prefixes).
+//  2. Highest LocalPref — tiebreak.
 //  3. Lowest MED — final tiebreak.
 //
-// All edges that survive all tiebreaks are inserted (ties are kept, not
-// broken arbitrarily). This means:
-//   - DC-originated prefix: one edge from the single origin peer.
-//   - Internet prefix via two ASBRs at equal quality: two edges, one per ASBR.
+// All edges that survive all tiebreaks are inserted, so two ASBRs advertising
+// an internet prefix at equal quality both appear.
 //
-// OwnershipEdges that connect a prefix to a nexthop stub (pfxown:pfx:…:nh:…)
-// are suppressed for any prefix that has a BGPReachabilityEdge winner —
-// the stub nexthop model is only needed when no eBGP peer is known.
+// # Dedup-rewrite handling and nh: stitching
 //
-// The full RIB is preserved in the source prefix graphs; filtering is applied
-// only to the composed view.
+// Some BGPReachabilityEdges are "dedup-rewritten": their SrcID was originally
+// a peer vertex that duplicates an IGP node (e.g. peer:10.0.0.1 is an eBGP
+// peer of the DC fabric but also xrd01 in the IS-IS domain). After rewrite the
+// edge points to the IGP node ID.
+//
+// These rewritten edges represent ASBR re-advertisement to the DC fabric, not
+// true prefix origination. When ALL best-path winners for a prefix are
+// dedup-rewritten, the real origin is more likely to be the iBGP source visible
+// through the unicast prefix handler's nexthop fallback path:
+//
+//   pfx:0.0.0.0/0 → nh:10.0.0.9  (from xrd01's iBGP session with xrd09)
+//
+// If nh:X can be stitched to an IGP node (X is in routerIDToNodeID), the
+// OwnershipEdge is rewritten to point directly to that node and the
+// dedup-rewritten BGPReachabilityEdges are dropped. The stitched edge thus
+// correctly identifies xrd09 as the default-route originator rather than
+// xrd01/02 (the ASBR re-advertisers to the DC fabric).
+//
+// When no stitchable OwnershipEdge is available, the dedup-rewritten edges
+// are kept as a fallback.
+//
+// OwnershipEdges for prefixes that have genuine (non-dedup) BGPReachabilityEdge
+// winners are always suppressed.
 //
 // # Algorithm
 //
 //  1. Build RouterID → nodeID index (IGP nodes only).
 //  2. Build dupVertexID → igpNodeID dedup map.
 //  3. Pre-pass — scan all source edges to:
-//     a. Identify nh: stubs that have at least one edge (nhWithEdges).
-//     b. Select the best BGPReachabilityEdge group per prefix (bestReach).
+//     a. Identify nh: stubs with at least one edge (nhWithEdges).
+//     b. Select the best BGPReachabilityEdge group per prefix (bestReach),
+//        tracking whether all winners are dedup-rewritten (allDedup).
 //  4. Pass 1 — copy vertices, skipping duplicates and bare stubs.
-//     Bare-stub filter targets only protocol-less plain-IP nodes (created by
-//     UpsertBGPSession / EnsureNode); IGP nodes are excluded because they
-//     always carry a non-empty Protocol field from the BGP-LS advertisement.
+//     The Protocol field guards IGP nodes: IS-IS nodes always have
+//     Protocol set, so they are never filtered as plain-IP stubs.
 //  5. Pass 2 — copy edges:
 //     - ETBGPSession: IS-IS or peer-vertex stitching; drop if unresolvable.
-//     - ETBGPReachability: skipped here (handled by pre-pass + pass 3).
-//     - ETOwnership (pfx→nh): suppressed when prefix has a bestReach winner.
+//     - ETBGPReachability: skipped (handled by pre-pass + pass 3).
+//     - ETOwnership (pfx→nh): suppressed if prefix has non-dedup winner;
+//       otherwise stitch nh:X → IGP node when X is in routerIDToNodeID.
 //     - All other types: copy verbatim.
-//  6. Pass 3 — insert all winning BGPReachabilityEdges per prefix.
-//  7. Pass 4 — remove nh: vertices that ended up with no edges in out.
+//  6. Pass 3 — insert winning BGPReachabilityEdges:
+//     allDedup groups are skipped when a stitched OwnershipEdge was emitted;
+//     otherwise inserted as fallback.
+//  7. Pass 4 — remove nh: vertices left with no edges.
 //
 // # Staleness
 //
@@ -89,15 +103,11 @@ func Compose(id string, sources ...*Graph) *Graph {
 	out := New(id)
 
 	// --- build RouterID → nodeID index (IGP nodes only) -------------------
-	// RouterID is the BGP loopback IP stored on IGP-derived Node vertices.
-	// NSExternalBGP nodes are excluded so a peer vertex for 10.0.0.6 doesn't
-	// shadow the IGP node for 0000.0000.0006 in the index.
 	routerIDToNodeID := make(map[string]string)
 	for _, src := range sources {
 		src.mu.RLock()
 		for _, v := range src.vertices {
 			if n, ok := v.(*Node); ok && n.RouterID != "" && n.Subtype != NSExternalBGP {
-				// Skip stubs where ID == RouterID (IP-addressed, not an IGP node).
 				if n.ID != n.RouterID {
 					routerIDToNodeID[n.RouterID] = n.ID
 				}
@@ -107,9 +117,6 @@ func Compose(id string, sources ...*Graph) *Graph {
 	}
 
 	// --- build dupVertexID → igpNodeID dedup map --------------------------
-	// Covers two cases:
-	//   a) NSExternalBGP peer node whose RouterID maps to a known IGP node.
-	//   b) Nexthop stub node whose plain-IP ID equals a known RouterID.
 	dupVertexToIGPID := make(map[string]string)
 	for _, src := range sources {
 		src.mu.RLock()
@@ -118,14 +125,12 @@ func Compose(id string, sources ...*Graph) *Graph {
 			if !ok {
 				continue
 			}
-			// Case (a): NSExternalBGP peer whose RouterID is a known IGP RouterID.
 			if n.Subtype == NSExternalBGP && n.RouterID != "" {
 				if igpID, exists := routerIDToNodeID[n.RouterID]; exists {
 					dupVertexToIGPID[n.ID] = igpID
 				}
 				continue
 			}
-			// Case (b): stub node whose own ID is a known RouterID (plain IP stub).
 			if igpID, exists := routerIDToNodeID[n.ID]; exists {
 				dupVertexToIGPID[n.ID] = igpID
 			}
@@ -134,51 +139,50 @@ func Compose(id string, sources ...*Graph) *Graph {
 	}
 
 	// --- pre-pass: nhWithEdges + bestReach ---------------------------------
-	// nhWithEdges: nh: stubs with at least one source edge.
-	//
-	// bestReach: per-prefix group of the best BGPReachabilityEdge candidates.
-	// All candidates at the minimum quality level (AS_PATH length, LocalPref,
-	// MED) are retained so that multi-homed prefixes keep edges to all equally-
-	// preferred egress peers.
 	nhWithEdges := make(map[string]struct{})
 	bestReach := make(map[string]*reachGroup) // pfxID → group
 	for _, src := range sources {
 		src.mu.RLock()
 		for _, e := range src.edges {
-			// Track nh: destinations (for orphan filtering).
 			if dst := e.GetDstID(); len(dst) > 3 && dst[:3] == "nh:" {
 				nhWithEdges[dst] = struct{}{}
 			}
-			// Accumulate BGPReachabilityEdge candidates.
 			typed, ok := e.(*BGPReachabilityEdge)
 			if !ok {
 				continue
 			}
+			isDup := false
 			candidate := typed
-			if igpID, isDup := dupVertexToIGPID[typed.SrcID]; isDup {
+			if igpID, ok := dupVertexToIGPID[typed.SrcID]; ok {
 				rewritten := *typed
 				rewritten.SrcID = igpID
 				rewritten.ID = "bgpreach:" + igpID + ":" + typed.DstID
 				candidate = &rewritten
+				isDup = true
 			}
+			cq := bgpQuality(candidate)
 			group, exists := bestReach[candidate.DstID]
 			if !exists {
 				bestReach[candidate.DstID] = &reachGroup{
-					quality: bgpQuality(candidate),
-					edges:   map[string]*BGPReachabilityEdge{candidate.ID: candidate},
+					quality:  cq,
+					edges:    map[string]*BGPReachabilityEdge{candidate.ID: candidate},
+					allDedup: isDup,
 				}
 				continue
 			}
-			cq := bgpQuality(candidate)
 			cmp := cq.compare(group.quality)
 			switch {
 			case cmp < 0:
 				// Strictly better — replace entire group.
 				group.quality = cq
 				group.edges = map[string]*BGPReachabilityEdge{candidate.ID: candidate}
+				group.allDedup = isDup
 			case cmp == 0:
 				// Tied — add to group (dedup by edge ID).
 				group.edges[candidate.ID] = candidate
+				if !isDup {
+					group.allDedup = false
+				}
 			}
 			// Worse — discard.
 		}
@@ -192,22 +196,10 @@ func Compose(id string, sources ...*Graph) *Graph {
 			if _, isDup := dupVertexToIGPID[v.GetID()]; isDup {
 				continue
 			}
-			// Drop bare stub nodes — Node vertices with no RouterID, no
-			// Subtype, AND no Protocol. This targets stubs auto-created by
-			// UpsertBGPSession (LocalBGPID plain-IP nodes) or EnsureNode.
-			//
-			// The Protocol guard is critical: IGP nodes derived from BGP-LS
-			// always carry a non-empty Protocol ("IS-IS_L1", "IS-IS_L2",
-			// "OSPF", etc.) set by translateLSNode. A Level-1-only IS-IS node
-			// that has no BGP router ID will have RouterID="" and Subtype="",
-			// but its Protocol is set — so it is NOT filtered here.
-			//
-			// Exception A: nh: nexthop stubs with at least one live source
-			// edge ARE kept (ResolvePrefix fallback for prefixes with no eBGP
-			// peer). Orphaned nh: stubs (no source edges) are dropped.
-			//
-			// Exception B: NSExternalBGP peer nodes always have a Subtype set,
-			// so they are never matched by this filter.
+			// Drop bare stub nodes: no RouterID, no Subtype, AND no Protocol.
+			// The Protocol guard exempts IGP nodes — translateLSNode always
+			// sets Protocol from the BGP-LS advertisement ("IS-IS_L1", etc.),
+			// so Level-1-only IS-IS nodes are never incorrectly filtered.
 			if n, ok := v.(*Node); ok && n.RouterID == "" && string(n.Subtype) == "" && n.Protocol == "" {
 				id := n.ID
 				if len(id) >= 3 && id[:3] == "nh:" {
@@ -223,23 +215,16 @@ func Compose(id string, sources ...*Graph) *Graph {
 		src.mu.RUnlock()
 	}
 
-	// --- pass 2: copy edges, stitching sessions and suppressing overridden nh: edges ---
+	// --- pass 2: copy edges, stitching sessions and handling nh: ownership ---
+	// stitchedPfxes records prefixes whose OwnershipEdge was stitched to an
+	// IGP node (used in pass 3 to suppress redundant dedup-rewritten edges).
+	stitchedPfxes := make(map[string]struct{})
+
 	for _, src := range sources {
 		src.mu.RLock()
 		for _, e := range src.edges {
 			switch typed := e.(type) {
 			case *BGPSessionEdge:
-				// Rewrite SrcID to the canonical vertex ID for the local end.
-				//
-				// Strategy 1 — IS-IS stitching: rewrite LocalBGPID to the
-				// IS-IS system-ID-based node ID via the routerIDToNodeID index.
-				//
-				// Strategy 2 — peer-vertex stitching: if peer:<LocalBGPID>
-				// exists in the composed graph, rewrite SrcID to that vertex.
-				// Handles DC-only BGP routers (tier-2/1/0) that run BMP but
-				// have no IGP adjacency.
-				//
-				// Edges that match neither strategy are dropped.
 				srcID := typed.SrcID
 				if igpID, ok := routerIDToNodeID[srcID]; ok {
 					rewritten := *typed
@@ -259,22 +244,34 @@ func Compose(id string, sources ...*Graph) *Graph {
 				// Unresolvable — drop.
 			case *BGPReachabilityEdge:
 				// Best-path winners selected in pre-pass; inserted in pass 3.
-				// Skip all candidates here to avoid duplicate insertion.
 				_ = typed
 			case *OwnershipEdge:
-				// Suppress prefix→nexthop stub ownership edges for any prefix
-				// that has a BGPReachabilityEdge winner. When the origin peer
-				// is known, the nh: stub fallback model is unnecessary and
-				// creates extra connections in the composed view.
-				//
-				// Interface→node ownership edges (SrcID = "iface:…") are
-				// always kept — they model structural containment, not prefix
-				// reachability.
-				if len(typed.SrcID) >= 4 && typed.SrcID[:4] == "pfx:" {
-					if _, hasBest := bestReach[typed.SrcID]; hasBest {
+				// Only handle prefix→nexthop ownership edges here.
+				if len(typed.SrcID) < 4 || typed.SrcID[:4] != "pfx:" {
+					_ = out.AddEdge(e)
+					continue
+				}
+				group, hasBest := bestReach[typed.SrcID]
+				if hasBest && !group.allDedup {
+					// Genuine (non-dedup) BGPReachabilityEdge winner exists —
+					// suppress this fallback ownership edge.
+					continue
+				}
+				// No genuine winner. Try to stitch nh:X → IGP node so the
+				// prefix connects to its true iBGP origin (e.g. the router
+				// doing default-originate) rather than an ASBR re-advertiser.
+				if len(typed.DstID) > 3 && typed.DstID[:3] == "nh:" {
+					nhIP := typed.DstID[3:]
+					if igpID, ok := routerIDToNodeID[nhIP]; ok {
+						rewritten := *typed
+						rewritten.DstID = igpID
+						rewritten.ID = "pfxown:" + typed.SrcID + ":" + igpID
+						stitchedPfxes[typed.SrcID] = struct{}{}
+						_ = out.AddEdge(&rewritten)
 						continue
 					}
 				}
+				// No IGP stitch available — keep as-is.
 				_ = out.AddEdge(e)
 			default:
 				_ = out.AddEdge(e)
@@ -283,20 +280,23 @@ func Compose(id string, sources ...*Graph) *Graph {
 		src.mu.RUnlock()
 	}
 
-	// --- pass 3: insert all winning BGPReachabilityEdges per prefix --------
-	// Multiple edges are inserted when two or more peers advertise the same
-	// prefix at equal quality (e.g. two internet egress ASBRs).
-	for _, group := range bestReach {
+	// --- pass 3: insert winning BGPReachabilityEdges per prefix ------------
+	for pfxID, group := range bestReach {
+		if group.allDedup {
+			if _, wasStitched := stitchedPfxes[pfxID]; wasStitched {
+				// OwnershipEdge stitching connected the prefix to its IGP
+				// origin — the ASBR re-advertisement edges are not needed.
+				continue
+			}
+			// No stitchable nexthop available — insert dedup edges as fallback
+			// so the prefix is not left orphaned.
+		}
 		for _, e := range group.edges {
 			_ = out.AddEdge(e)
 		}
 	}
 
-	// --- pass 4: remove nh: vertices that have no edges in the composed graph ---
-	// An nh: vertex may have been included in pass 1 (it had source edges) but
-	// all its pfx→nh OwnershipEdges were suppressed in pass 2 because the
-	// prefixes got BGPReachabilityEdge winners. Without edges, the vertex is an
-	// invisible orphan — remove it to keep the graph clean.
+	// --- pass 4: remove nh: vertices left with no edges --------------------
 	nhEdgeDsts := make(map[string]struct{})
 	for _, e := range out.AllEdges() {
 		if dst := e.GetDstID(); len(dst) > 3 && dst[:3] == "nh:" {
@@ -315,16 +315,17 @@ func Compose(id string, sources ...*Graph) *Graph {
 }
 
 // reachGroup holds all BGPReachabilityEdge candidates for a single prefix that
-// share the same "best" quality. Multiple edges are kept when two peers are
-// equally preferred — this preserves multi-homed prefix visibility.
+// share the same best quality. allDedup is true when every winning edge was
+// obtained via dedup rewrite (peer:X → IGP node) — indicating the edges
+// represent ASBR re-advertisement rather than true prefix origination.
 type reachGroup struct {
-	quality bgpPathQuality
-	edges   map[string]*BGPReachabilityEdge // edgeID → edge
+	quality  bgpPathQuality
+	edges    map[string]*BGPReachabilityEdge // edgeID → edge
+	allDedup bool
 }
 
 // bgpPathQuality captures the BGP path attributes used for best-path
-// selection. Lower-valued fields are better for MED; higher-valued for
-// LocalPref; shorter for ASPath length.
+// comparison.
 type bgpPathQuality struct {
 	asPathLen uint32
 	localPref uint32
@@ -339,8 +340,8 @@ func bgpQuality(e *BGPReachabilityEdge) bgpPathQuality {
 	}
 }
 
-// compare returns -1 if q is better than other, 0 if equal, +1 if worse.
-// "Better" follows the standard BGP decision process:
+// compare returns -1 if q is strictly better than other, 0 if equal, +1 if
+// worse. "Better" follows the standard BGP decision process:
 //  1. Shorter AS_PATH
 //  2. Higher LocalPref
 //  3. Lower MED
