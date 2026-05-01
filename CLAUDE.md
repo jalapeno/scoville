@@ -354,6 +354,9 @@ Example: path from DC prefix to default route (both resolved to border nodes aut
 
 ## Current status (as of 2026-05-01)
 
+All core subsystems working. Both `ipv4-graph` and `ipv6-graph` verified clean
+on 22-node XRd testbed (IS-IS backbone + BGP-only DC fabric nodes).
+
 Done:
 - Full BMP pipeline (17-node XRd testbed)
 - Dijkstra SPF with disjointness, BW, latency, admin-group, Flex-Algo constraints
@@ -397,56 +400,23 @@ Done:
   nexthop stitching — when all best-path winners are dedup-rewritten (ASBR
   re-advertisers), compose falls back to the OwnershipEdge `pfx→nh:X` and stitches
   `nh:X` directly to the IGP node whose RouterID equals X
+- Orphaned `nh:` vertex suppression: when a prefix has multiple `pfx→nh:` OwnershipEdges
+  and one of them stitches successfully (RouterID match), the un-stitchable siblings
+  (e.g. peering interface IPs that aren't RouterIDs) are now suppressed in compose pass 2
+  via the `stitchablePfx` pre-check; pass 4 then cleans up the edgeless `nh:` vertices
 - Universal endpoint resolution: any vertex type (IGP node, Endpoint, Prefix, external
   BGP peer) can be used as path endpoint; engine resolves to SRv6 border node
+- Topology-agnostic Dijkstra: path engine traverses any node-to-node edge (LinkEdge,
+  BGPSessionEdge, any future type); `CostFunc`/`EdgeAllowed`/`pathMetric` all accept
+  `graph.Edge`; segment list builder soft-skips hops with no SID data and returns path
+  with empty segment list rather than erroring
 - Executive demo UI (topology graph, workload list, path/SID display, path-request form)
 - `scripts/test-local.sh` — local integration test suite (no NATS/BMP required)
 - `test-data/clos-fabric.json` — 4-spine 8-leaf Clos, 32 GPU endpoints (4/leaf)
 
-## Known issue under investigation (as of 2026-05-01)
+## No known issues (as of 2026-05-01)
 
-**Internet prefixes disconnected / best-path dedup regressed in ipv4-graph**
-
-After deploying the default-route stitching fix (commit 87d064b), internet prefixes
-appear disconnected from the IS-IS backbone in the UI, and ipv4-graph shows a "mess"
-of prefix/peer edges suggesting best-path dedup broke.
-
-The `allDedup` logic change in compose.go is the suspected cause. The key change:
-
-- **Old**: suppress OwnershipEdge if ANY bestReach winner exists
-- **New**: suppress only if winner exists AND `allDedup=false`; otherwise try nh: stitching
-
-For genuine internet prefixes (`allDedup=false`), suppression behaviour is identical.
-The bug is likely subtle — need diagnostic data to pinpoint.
-
-**Diagnostic curls to run first thing:**
-```bash
-NODE=<node-ip>:30080
-
-# 1. Edges on a known internet prefix in the COMPOSED graph
-curl -s http://$NODE/topology/ipv4-graph/graph | \
-  jq '.edges | map(select(.dst == "pfx:96.1.2.0/23" or .src == "pfx:96.1.2.0/23"))'
-
-# 2. Same prefix in the SOURCE graph (before compose)
-curl -s http://$NODE/topology/underlay-prefixes-v4/graph | \
-  jq '.edges | map(select(.dst == "pfx:96.1.2.0/23" or .src == "pfx:96.1.2.0/23"))'
-
-# 3. A DC prefix for comparison
-curl -s http://$NODE/topology/ipv4-graph/graph | \
-  jq '.edges | map(select(.dst == "pfx:10.10.46.0/24" or .src == "pfx:10.10.46.0/24"))'
-
-# 4. Count total edges by type in ipv4-graph (sanity check)
-curl -s http://$NODE/topology/ipv4-graph/graph | \
-  jq '.edges | group_by(.type) | map({type: .[0].type, count: length})'
-
-# 5. Check the default route is still correct
-curl -s http://$NODE/topology/ipv4-graph/graph | \
-  jq '.edges | map(select(.dst == "pfx:0.0.0.0/0" or .src == "pfx:0.0.0.0/0"))'
-```
-
-Share this output when resuming — it will show exactly which edges exist vs what
-should exist, and whether the issue is missing BGPReachabilityEdges, extra ones,
-or missing BGPSession stitching that leaves prefixes unconnected from IS-IS nodes.
+Both `ipv4-graph` and `ipv6-graph` are clean on the 22-node testbed. `go test ./...` passes.
 
 Roadmap:
 - **Leaf-pair caching + ECMP-group output** — pre-compute all leaf→leaf segment lists
