@@ -1,7 +1,6 @@
 package pathengine
 
 import (
-	"fmt"
 	"net/netip"
 
 	"github.com/jalapeno/syd/internal/graph"
@@ -85,15 +84,25 @@ func BuildSegmentList(g *graph.Graph, spf *SPFResult, algoID uint8, tenantID str
 
 // buildItemsUA is the default mode: uA SID (or uN fallback) for each hop as
 // a 32-bit slot, plus destination uN as the final anchor.
+//
+// For LinkEdge hops the uA SID (or uN fallback) is used. For all other edge
+// types (e.g. BGPSessionEdge) the source node's uN SID is used. Hops with no
+// SID data are silently skipped, yielding a partial or empty segment list.
 func buildItemsUA(g *graph.Graph, spf *SPFResult, algoID uint8, tenantID string) ([]srv6.SIDItem, error) {
 	items := make([]srv6.SIDItem, 0, len(spf.Edges)+2)
 
-	for i, le := range spf.Edges {
-		item, err := uaSIDItemForEdge(g, le, algoID)
-		if err != nil {
-			return nil, fmt.Errorf("hop %d (%s→%s): %w", i, le.GetSrcID(), le.GetDstID(), err)
+	for _, e := range spf.Edges {
+		switch le := e.(type) {
+		case *graph.LinkEdge:
+			if item, ok := uaSIDItemForEdge(g, le, algoID); ok {
+				items = append(items, item)
+			}
+		default:
+			// Non-link edge (e.g. BGP session): use source node uN SID.
+			if item, ok := nodeUNSIDItem(g, e.GetSrcID(), algoID); ok {
+				items = append(items, item)
+			}
 		}
-		items = append(items, item)
 	}
 
 	dstID := spf.NodeIDs[len(spf.NodeIDs)-1]
@@ -116,15 +125,24 @@ func buildItemsUA(g *graph.Graph, spf *SPFResult, algoID uint8, tenantID string)
 //
 // Both function-extracted items and uN fallback items use structure {32,16,0,0}
 // so TryPackUSID keeps slot widths consistent and packs 6 per container.
+//
+// For non-link edges (e.g. BGPSessionEdge) the source node's uN SID is used.
+// Hops with no SID data are silently skipped.
 func buildItemsUAOnly(g *graph.Graph, spf *SPFResult, algoID uint8, tenantID string) ([]srv6.SIDItem, error) {
 	items := make([]srv6.SIDItem, 0, len(spf.Edges)+2)
 
-	for i, le := range spf.Edges {
-		item, err := functionOnlySIDItem(g, le, algoID)
-		if err != nil {
-			return nil, fmt.Errorf("hop %d (%s→%s): %w", i, le.GetSrcID(), le.GetDstID(), err)
+	for _, e := range spf.Edges {
+		switch le := e.(type) {
+		case *graph.LinkEdge:
+			if item, ok := functionOnlySIDItem(g, le, algoID); ok {
+				items = append(items, item)
+			}
+		default:
+			// Non-link edge (e.g. BGP session): use source node uN SID.
+			if item, ok := nodeUNSIDItem(g, e.GetSrcID(), algoID); ok {
+				items = append(items, item)
+			}
 		}
-		items = append(items, item)
 	}
 
 	dstID := spf.NodeIDs[len(spf.NodeIDs)-1]
@@ -143,6 +161,7 @@ func buildItemsUAOnly(g *graph.Graph, spf *SPFResult, algoID uint8, tenantID str
 // buildItemsUNOnly builds 16-bit node-slot items for every node except the
 // source. NodeIDs = [src, transit..., dst]; src is skipped because the
 // originating node does not need to appear in its own segment list.
+// Nodes without a uN SID are silently skipped.
 func buildItemsUNOnly(g *graph.Graph, spf *SPFResult, algoID uint8, tenantID string) ([]srv6.SIDItem, error) {
 	if len(spf.NodeIDs) < 2 {
 		return nil, nil
@@ -150,11 +169,9 @@ func buildItemsUNOnly(g *graph.Graph, spf *SPFResult, algoID uint8, tenantID str
 	items := make([]srv6.SIDItem, 0, len(spf.NodeIDs))
 
 	for _, nodeID := range spf.NodeIDs[1:] { // skip source at index 0
-		item, ok := nodeUNSIDItem(g, nodeID, algoID)
-		if !ok {
-			return nil, fmt.Errorf("no uN SID for node %q", nodeID)
+		if item, ok := nodeUNSIDItem(g, nodeID, algoID); ok {
+			items = append(items, item)
 		}
-		items = append(items, item)
 	}
 
 	if tenantID != "" {
@@ -169,13 +186,14 @@ func buildItemsUNOnly(g *graph.Graph, spf *SPFResult, algoID uint8, tenantID str
 
 // uaSIDItemForEdge returns the SIDItem for the egress interface of a LinkEdge
 // (ModeUA). Falls back to the source node's uN SID if no uA SID is found.
-func uaSIDItemForEdge(g *graph.Graph, le *graph.LinkEdge, algoID uint8) (srv6.SIDItem, error) {
+// Returns (item, false) when neither uA nor uN SID data is available.
+func uaSIDItemForEdge(g *graph.Graph, le *graph.LinkEdge, algoID uint8) (srv6.SIDItem, bool) {
 	if le.LocalIfaceID != "" {
 		v := g.GetVertex(le.LocalIfaceID)
 		if v != nil {
 			if iface, ok := v.(*graph.Interface); ok {
 				if item, found := pickUASIDItem(iface.SRv6uASIDs, algoID); found {
-					return item, nil
+					return item, true
 				}
 			}
 		}
@@ -183,13 +201,10 @@ func uaSIDItemForEdge(g *graph.Graph, le *graph.LinkEdge, algoID uint8) (srv6.SI
 
 	// Fall back to source node uN SID.
 	if item, ok := nodeUNSIDItem(g, le.GetSrcID(), algoID); ok {
-		return item, nil
+		return item, true
 	}
 
-	return srv6.SIDItem{}, fmt.Errorf(
-		"no uA SID on interface %q and no uN SID on node %q — topology missing SRv6 SID data",
-		le.LocalIfaceID, le.GetSrcID(),
-	)
+	return srv6.SIDItem{}, false
 }
 
 // functionOnlySIDItem returns a 16-bit SIDItem for ModeUAOnly.
@@ -199,14 +214,15 @@ func uaSIDItemForEdge(g *graph.Graph, le *graph.LinkEdge, algoID uint8) (srv6.SI
 // yielding structure {32,16,0,0}. If no uA SID is available, the source
 // node's uN SID (also {32,16,0,0}) is used as a fallback. Both produce
 // consistent 16-bit slots so TryPackUSID packs 6 per container.
-func functionOnlySIDItem(g *graph.Graph, le *graph.LinkEdge, algoID uint8) (srv6.SIDItem, error) {
+// Returns (item, false) when neither uA nor uN SID data is available.
+func functionOnlySIDItem(g *graph.Graph, le *graph.LinkEdge, algoID uint8) (srv6.SIDItem, bool) {
 	if le.LocalIfaceID != "" {
 		v := g.GetVertex(le.LocalIfaceID)
 		if v != nil {
 			if iface, ok := v.(*graph.Interface); ok {
 				if rawItem, found := pickUASIDItem(iface.SRv6uASIDs, algoID); found {
 					if funcItem, ok := extractFunctionSlot(rawItem); ok {
-						return funcItem, nil
+						return funcItem, true
 					}
 				}
 			}
@@ -215,13 +231,10 @@ func functionOnlySIDItem(g *graph.Graph, le *graph.LinkEdge, algoID uint8) (srv6
 
 	// Fall back to source node uN SID (16-bit node slot).
 	if item, ok := nodeUNSIDItem(g, le.GetSrcID(), algoID); ok {
-		return item, nil
+		return item, true
 	}
 
-	return srv6.SIDItem{}, fmt.Errorf(
-		"no uA SID on interface %q and no uN SID on node %q",
-		le.LocalIfaceID, le.GetSrcID(),
-	)
+	return srv6.SIDItem{}, false
 }
 
 // extractFunctionSlot extracts the function bits from a uA SIDItem and returns

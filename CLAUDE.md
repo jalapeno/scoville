@@ -1,5 +1,21 @@
 # Syd — SR Network Controller
 
+## Core design principle: topology and protocol agnostic
+
+**Syd is first and foremost topology and protocol agnostic. Think Google Maps,
+not routers and routing protocols.**
+
+- Any vertex reachable from another via any edge (IGP link, BGP session, tunnel,
+  even a hypothetical "bike trail" edge) is reachable in syd's world.
+- Never introduce code-level dependencies on routing protocol rules or semantics
+  (IS-IS, BGP, OSPF). Protocol-specific knowledge belongs in data ingestion
+  (bmpcollector, topology push), not in the path engine.
+- Constraints like Flex-Algo are **user choices** expressed in the path request,
+  not hard-coded assumptions in how the graph is built or traversed.
+- If no SRv6 SIDs exist for a computed path, syd still returns the path with an
+  empty segment list and lets the caller decide what to do. SID availability is
+  orthogonal to path reachability.
+
 ## Project overview
 
 Syd is an SRv6 SDN control plane for AI fabric path pinning and general
@@ -301,7 +317,35 @@ For the current demo/testbed use case (32 GPUs, 8 GPUs/job) there is no issue.
 
 ---
 
-## Current status (as of 2026-04-25)
+## Path request — universal endpoint resolution
+
+Any vertex type can be used as a path endpoint. The engine resolves each endpoint
+to its "entry point" into the SRv6 domain automatically:
+
+| Endpoint vertex type | Resolution |
+|---|---|
+| IGP Node (`0000.0000.000X`) | Used directly as SPF src/dst |
+| Endpoint (GPU/host) | Follows `AttachmentEdge` to attached Node |
+| Prefix (`pfx:X.X.X.X/N`) | Follows `BGPReachabilityEdge` → peer → IGPSession → border node; fallback to `OwnershipEdge` for local prefixes |
+| External BGP peer (`peer:X.X.X.X`) | Follows inbound `BGPSessionEdge` to the IGP node that peers with it |
+
+The `dst_prefix` / `src_prefix` request fields still work but are now largely
+redundant — prefer putting prefix or peer vertex IDs directly in `endpoints`.
+
+Example: path from DC prefix to default route (both resolved to border nodes automatically):
+```json
+{
+  "topology_id": "ipv4-graph",
+  "workload_id": "dc-to-internet",
+  "endpoints": [
+    {"id": "pfx:10.10.46.0/24"},
+    {"id": "pfx:0.0.0.0/0"}
+  ],
+  "pairing_mode": "all_directed"
+}
+```
+
+## Current status (as of 2026-05-01)
 
 Done:
 - Full BMP pipeline (17-node XRd testbed)
@@ -318,12 +362,8 @@ Done:
   iBGP sessions skipped; eBGP peers keyed as `peer:<RemoteBGPID>` (one vertex per physical router)
 - Multi-domain node keying: `nodeID` incorporates `DomainID` when non-zero;
   VRF-scoped prefix keys reserved for L3VPN ingestion
-- `dst_prefix` / `src_prefix` extension to `POST /paths/request` — GPU→prefix
-  egress and prefix→GPU/service ingress. Resolves CIDR → BGP reachability edge →
-  IGP border node; falls back to OwnershipEdge for locally-originated prefixes.
-  Best path selected by LocalPref↓ then ASPath length↑. `bgp_nexthop` and
-  `prefix_id` returned per PathResult. Requires composite topology (e.g.
-  `"ipv6-graph"`). New file: `internal/pathengine/prefix.go`.
+- `dst_prefix` / `src_prefix` extension to `POST /paths/request` (see universal endpoint
+  resolution above — prefix/peer IDs can now go directly in `endpoints`)
 - `graph.Compose()` + `POST /topology/compose` — merges IGP + peer + prefix source graphs
   into a unified snapshot with BGP session stitching (RouterID join); both `ipv4-graph`
   and `ipv6-graph` variants supported by choosing the appropriate prefix source;
@@ -342,12 +382,64 @@ Done:
 - Peer vertex consolidation: `peer:<RemoteBGPID>` keying (one vertex per physical router);
   compose stitching extended with peer-vertex fallback so DC-only BGP routers
   (tier-2/1/0) appear in composed graphs without IS-IS adjacency requirement
+- BGP best-path filtering in compose: one `BGPReachabilityEdge` per prefix per quality
+  tier (shortest AS_PATH → highest LocalPref → lowest MED); tied peers all kept
+  (multi-homed prefixes show edges to each equally-preferred egress); filtering applied
+  to composed view only, source prefix graphs retain full RIB
+- Default route stitching: `0.0.0.0/0` connects to xrd09 (`0000.0000.0009`) via iBGP
+  nexthop stitching — when all best-path winners are dedup-rewritten (ASBR
+  re-advertisers), compose falls back to the OwnershipEdge `pfx→nh:X` and stitches
+  `nh:X` directly to the IGP node whose RouterID equals X
+- Universal endpoint resolution: any vertex type (IGP node, Endpoint, Prefix, external
+  BGP peer) can be used as path endpoint; engine resolves to SRv6 border node
 - Executive demo UI (topology graph, workload list, path/SID display, path-request form)
 - `scripts/test-local.sh` — local integration test suite (no NATS/BMP required)
-- `test-data/clos-fabric.json` — 4-spine 8-leaf Clos, 32 GPU endpoints (4/leaf);
-  64 interface vertices with per-node `srv6_ua_sids` (`fc00:0:f000::`–`fc00:0:f007::` on
-  spines, `fc00:0:f000::`–`fc00:0:f003::` on leaves); all IGP adjacency edges reference
-  interfaces via `local_iface_id`; supports `segment_list_mode: "ua"` path requests
+- `test-data/clos-fabric.json` — 4-spine 8-leaf Clos, 32 GPU endpoints (4/leaf)
+
+## Known issue under investigation (as of 2026-05-01)
+
+**Internet prefixes disconnected / best-path dedup regressed in ipv4-graph**
+
+After deploying the default-route stitching fix (commit 87d064b), internet prefixes
+appear disconnected from the IS-IS backbone in the UI, and ipv4-graph shows a "mess"
+of prefix/peer edges suggesting best-path dedup broke.
+
+The `allDedup` logic change in compose.go is the suspected cause. The key change:
+
+- **Old**: suppress OwnershipEdge if ANY bestReach winner exists
+- **New**: suppress only if winner exists AND `allDedup=false`; otherwise try nh: stitching
+
+For genuine internet prefixes (`allDedup=false`), suppression behaviour is identical.
+The bug is likely subtle — need diagnostic data to pinpoint.
+
+**Diagnostic curls to run first thing:**
+```bash
+NODE=<node-ip>:30080
+
+# 1. Edges on a known internet prefix in the COMPOSED graph
+curl -s http://$NODE/topology/ipv4-graph/graph | \
+  jq '.edges | map(select(.dst == "pfx:96.1.2.0/23" or .src == "pfx:96.1.2.0/23"))'
+
+# 2. Same prefix in the SOURCE graph (before compose)
+curl -s http://$NODE/topology/underlay-prefixes-v4/graph | \
+  jq '.edges | map(select(.dst == "pfx:96.1.2.0/23" or .src == "pfx:96.1.2.0/23"))'
+
+# 3. A DC prefix for comparison
+curl -s http://$NODE/topology/ipv4-graph/graph | \
+  jq '.edges | map(select(.dst == "pfx:10.10.46.0/24" or .src == "pfx:10.10.46.0/24"))'
+
+# 4. Count total edges by type in ipv4-graph (sanity check)
+curl -s http://$NODE/topology/ipv4-graph/graph | \
+  jq '.edges | group_by(.type) | map({type: .[0].type, count: length})'
+
+# 5. Check the default route is still correct
+curl -s http://$NODE/topology/ipv4-graph/graph | \
+  jq '.edges | map(select(.dst == "pfx:0.0.0.0/0" or .src == "pfx:0.0.0.0/0"))'
+```
+
+Share this output when resuming — it will show exactly which edges exist vs what
+should exist, and whether the issue is missing BGPReachabilityEdges, extra ones,
+or missing BGPSession stitching that leaves prefixes unconnected from IS-IS nodes.
 
 Roadmap:
 - **Leaf-pair caching + ECMP-group output** — pre-compute all leaf→leaf segment lists

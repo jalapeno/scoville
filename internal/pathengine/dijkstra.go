@@ -12,16 +12,19 @@ import (
 type SPFResult struct {
 	// NodeIDs is the ordered list of Node vertex IDs from src to dst inclusive.
 	NodeIDs []string
-	// EdgeIDs is the ordered list of LinkEdge IDs traversed (len == len(NodeIDs)-1).
+	// EdgeIDs is the ordered list of edge IDs traversed (len == len(NodeIDs)-1).
 	EdgeIDs []string
-	// Edges is the resolved LinkEdge slice for convenient metric aggregation.
-	Edges []*graph.LinkEdge
+	// Edges is the resolved edge slice for convenient metric aggregation.
+	// Edges may be of any type (LinkEdge, BGPSessionEdge, etc.).
+	Edges []graph.Edge
 	// TotalCost is the sum of edge costs along the path.
 	TotalCost float64
 }
 
 // Dijkstra runs a constrained weighted shortest-path search from srcID to
-// dstID over the Node subgraph, using only LinkEdge and IGPAdjacency edges.
+// dstID over the Node subgraph. Any edge whose destination is a Node vertex
+// is eligible for traversal — LinkEdges, BGPSessionEdges, and any future
+// node-to-node edge type — keeping the path engine topology-agnostic.
 //
 // The ExcludedSet and PathConstraints are applied per-edge and per-node during
 // traversal so that disjointness and TE constraints are respected without
@@ -67,25 +70,25 @@ func Dijkstra(
 		}
 
 		for _, e := range g.OutEdges(u) {
-			le, ok := e.(*graph.LinkEdge)
-			if !ok {
-				continue // only traverse LinkEdges
-			}
-			if le.GetType() != graph.ETIGPAdjacency && le.GetType() != graph.ETPhysical {
+			v := e.GetDstID()
+
+			// Only traverse edges that lead to a Node vertex. This skips
+			// attachment, ownership, reachability, and other non-transit edges
+			// while remaining agnostic to the specific edge type used.
+			dstVtx := g.GetVertex(v)
+			if dstVtx == nil || dstVtx.GetType() != graph.VTNode {
 				continue
 			}
-
-			v := le.GetDstID()
 
 			// Never exclude the destination node, but do exclude transit nodes.
 			if v != dstID && !NodeAllowed(v, ex) {
 				continue
 			}
-			if !EdgeAllowed(le, ex, constraints, g) {
+			if !EdgeAllowed(e, ex, constraints, g) {
 				continue
 			}
 
-			edgeCost := cf(le)
+			edgeCost := cf(e)
 			if edgeCost == inf {
 				continue
 			}
@@ -104,7 +107,7 @@ func Dijkstra(
 			if newDist < vDist {
 				dist[v] = newDist
 				prev[v] = u
-				prevEdge[v] = le.GetID()
+				prevEdge[v] = e.GetID()
 				heap.Push(pq, heapItem{id: v, cost: newDist})
 			}
 		}
@@ -142,18 +145,14 @@ func reconstructPath(
 	}
 	nodeIDs = append([]string{srcID}, nodeIDs...)
 
-	// Resolve edge IDs to *LinkEdge for convenience.
-	edges := make([]*graph.LinkEdge, len(edgeIDs))
+	// Resolve edge IDs to graph.Edge for convenient metric aggregation.
+	edges := make([]graph.Edge, len(edgeIDs))
 	for i, eid := range edgeIDs {
 		e := g.GetEdge(eid)
 		if e == nil {
 			return nil, fmt.Errorf("edge %q not found during path reconstruction", eid)
 		}
-		le, ok := e.(*graph.LinkEdge)
-		if !ok {
-			return nil, fmt.Errorf("edge %q is not a LinkEdge", eid)
-		}
-		edges[i] = le
+		edges[i] = e
 	}
 
 	return &SPFResult{

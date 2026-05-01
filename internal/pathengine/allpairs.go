@@ -173,14 +173,14 @@ func deriveReversePath(
 
 	// Walk forward edges in reverse, collecting the reverse-direction edges.
 	revEdgeIDs := make([]string, n)
-	revEdges := make([]*graph.LinkEdge, n)
+	revEdges := make([]graph.Edge, n)
 
 	for i := n - 1; i >= 0; i-- {
-		fwdEdge, ok := g.GetEdge(fwd.EdgeIDs[i]).(*graph.LinkEdge)
-		if !ok {
-			return nil, fmt.Errorf("forward edge %q is not a LinkEdge", fwd.EdgeIDs[i])
+		fwdEdge := g.GetEdge(fwd.EdgeIDs[i])
+		if fwdEdge == nil {
+			return nil, fmt.Errorf("forward edge %q not found", fwd.EdgeIDs[i])
 		}
-		rev, err := findReverseLinkEdge(g, fwdEdge)
+		rev, err := findReverseEdge(g, fwdEdge)
 		if err != nil {
 			return nil, fmt.Errorf("hop %d: %w", i, err)
 		}
@@ -218,6 +218,26 @@ func deriveReversePath(
 		Metric:      metric,
 		Constraints: fwd.Constraints,
 	}, nil
+}
+
+// findReverseEdge finds the edge that traverses the same link as fwd but in
+// the opposite direction. For LinkEdges an exact interface match is preferred;
+// for all other edge types (e.g. BGPSessionEdge) any same-type edge with
+// swapped src/dst is accepted.
+func findReverseEdge(g *graph.Graph, fwd graph.Edge) (graph.Edge, error) {
+	if le, ok := fwd.(*graph.LinkEdge); ok {
+		return findReverseLinkEdge(g, le)
+	}
+	// Generic fallback: find an edge of the same type with src/dst swapped.
+	for _, e := range g.OutEdges(fwd.GetDstID()) {
+		if e.GetDstID() == fwd.GetSrcID() && e.GetType() == fwd.GetType() {
+			return e, nil
+		}
+	}
+	return nil, fmt.Errorf(
+		"no reverse %s edge found from %q to %q (forward edge %q)",
+		fwd.GetType(), fwd.GetDstID(), fwd.GetSrcID(), fwd.GetID(),
+	)
 }
 
 // findReverseLinkEdge finds the LinkEdge that traverses the same physical link

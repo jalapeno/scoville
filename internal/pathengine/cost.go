@@ -15,32 +15,47 @@ const (
 	MetricDelay MetricType = "delay"
 )
 
-// CostFunc returns the cost of traversing a LinkEdge. Returning +Inf
+// CostFunc returns the traversal cost of any graph edge. Returning +Inf
 // effectively removes the edge from consideration.
-type CostFunc func(e *graph.LinkEdge) float64
+//
+// For LinkEdges the cost is derived from the requested metric (IGP, TE, or
+// delay). For all other edge types (e.g. BGPSessionEdge) a flat hop cost of
+// 1.0 is used, keeping them eligible for traversal while ranking them after
+// any lower-metric IGP alternatives.
+type CostFunc func(e graph.Edge) float64
 
-// CostFuncFor returns a CostFunc for the given metric type. Edges that are
-// administratively down (zero max bandwidth when a bandwidth constraint is
-// set) are assigned infinite cost.
+// CostFuncFor returns a CostFunc for the given metric type.
 func CostFuncFor(mt MetricType) CostFunc {
 	switch mt {
 	case MetricTE:
-		return func(e *graph.LinkEdge) float64 {
-			if e.TEMetric == 0 {
-				return float64(e.IGPMetric) // fall back to IGP if TE not set
+		return func(e graph.Edge) float64 {
+			le, ok := e.(*graph.LinkEdge)
+			if !ok {
+				return 1.0 // flat hop cost for non-link edges
 			}
-			return float64(e.TEMetric)
+			if le.TEMetric == 0 {
+				return float64(le.IGPMetric) // fall back to IGP if TE not set
+			}
+			return float64(le.TEMetric)
 		}
 	case MetricDelay:
-		return func(e *graph.LinkEdge) float64 {
-			if e.UnidirDelay == 0 {
-				return float64(e.IGPMetric) // fall back to IGP if delay not measured
+		return func(e graph.Edge) float64 {
+			le, ok := e.(*graph.LinkEdge)
+			if !ok {
+				return 1.0
 			}
-			return float64(e.UnidirDelay)
+			if le.UnidirDelay == 0 {
+				return float64(le.IGPMetric) // fall back to IGP if delay not measured
+			}
+			return float64(le.UnidirDelay)
 		}
 	default: // MetricIGP
-		return func(e *graph.LinkEdge) float64 {
-			return float64(e.IGPMetric)
+		return func(e graph.Edge) float64 {
+			le, ok := e.(*graph.LinkEdge)
+			if !ok {
+				return 1.0
+			}
+			return float64(le.IGPMetric)
 		}
 	}
 }
@@ -115,39 +130,46 @@ func (ex *ExcludedSet) AddPath(p *graph.Path, level graph.DisjointnessLevel, g *
 	}
 }
 
-// EdgeAllowed returns true if the given LinkEdge may be used in a path,
-// given the graph, exclusion set, and path constraints.
-func EdgeAllowed(e *graph.LinkEdge, ex *ExcludedSet, c graph.PathConstraints, g *graph.Graph) bool {
+// EdgeAllowed returns true if the given edge may be used in a path, given the
+// graph, exclusion set, and path constraints.
+//
+// LinkEdge-specific checks (SRLG, admin group, bandwidth) are applied only
+// when the edge is a *graph.LinkEdge; they are silently skipped for all other
+// edge types (e.g. BGPSessionEdge), keeping traversal protocol-agnostic.
+func EdgeAllowed(e graph.Edge, ex *ExcludedSet, c graph.PathConstraints, g *graph.Graph) bool {
 	// Excluded edge ID.
 	if _, excluded := ex.Edges[e.GetID()]; excluded {
 		return false
 	}
 
-	// SRLG exclusion: if any of the edge's SRLG groups are excluded, block it.
-	for _, srlg := range e.SRLG {
-		if _, excluded := ex.SRLGs[srlg]; excluded {
+	// LinkEdge-specific constraints.
+	if le, ok := e.(*graph.LinkEdge); ok {
+		// SRLG exclusion: if any of the edge's SRLG groups are excluded, block it.
+		for _, srlg := range le.SRLG {
+			if _, excluded := ex.SRLGs[srlg]; excluded {
+				return false
+			}
+		}
+
+		// Admin group affinity: exclude bits must not be set.
+		if c.ExcludeGroup != 0 && le.AdminGroup&c.ExcludeGroup != 0 {
 			return false
 		}
-	}
 
-	// Admin group affinity: exclude bits must not be set.
-	if c.ExcludeGroup != 0 && e.AdminGroup&c.ExcludeGroup != 0 {
-		return false
-	}
-
-	// Admin group include: required bits must all be set (if specified).
-	if c.AdminGroup != 0 && e.AdminGroup&c.AdminGroup != c.AdminGroup {
-		return false
-	}
-
-	// Bandwidth: edge must have at least the required available bandwidth.
-	if c.MinBandwidthBPS > 0 {
-		avail := e.UnidirAvailBW
-		if avail == 0 {
-			avail = e.MaxBW // fall back to max if real-time data not available
-		}
-		if avail < c.MinBandwidthBPS {
+		// Admin group include: required bits must all be set (if specified).
+		if c.AdminGroup != 0 && le.AdminGroup&c.AdminGroup != c.AdminGroup {
 			return false
+		}
+
+		// Bandwidth: edge must have at least the required available bandwidth.
+		if c.MinBandwidthBPS > 0 {
+			avail := le.UnidirAvailBW
+			if avail == 0 {
+				avail = le.MaxBW // fall back to max if real-time data not available
+			}
+			if avail < c.MinBandwidthBPS {
+				return false
+			}
 		}
 	}
 
@@ -189,20 +211,26 @@ func NodeAllowed(nodeID string, ex *ExcludedSet) bool {
 	return !excluded
 }
 
-// pathMetric computes the PathMetric for a sequence of LinkEdges.
-func pathMetric(edges []*graph.LinkEdge) graph.PathMetric {
+// pathMetric computes the PathMetric for a sequence of edges. LinkEdge-
+// specific attributes (IGP/TE metric, delay, bandwidth) are aggregated when
+// the edge is a *graph.LinkEdge; other edge types contribute only to HopCount.
+func pathMetric(edges []graph.Edge) graph.PathMetric {
 	m := graph.PathMetric{
 		BottleneckBW: math.MaxUint64,
 		HopCount:     len(edges),
 	}
 	for _, e := range edges {
-		m.IGPMetric += e.IGPMetric
-		m.TEMetric += e.TEMetric
-		m.DelayUS += e.UnidirDelay
+		le, ok := e.(*graph.LinkEdge)
+		if !ok {
+			continue
+		}
+		m.IGPMetric += le.IGPMetric
+		m.TEMetric += le.TEMetric
+		m.DelayUS += le.UnidirDelay
 
-		bw := e.UnidirAvailBW
+		bw := le.UnidirAvailBW
 		if bw == 0 {
-			bw = e.MaxBW
+			bw = le.MaxBW
 		}
 		if bw > 0 && bw < m.BottleneckBW {
 			m.BottleneckBW = bw
