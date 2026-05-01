@@ -31,7 +31,7 @@ package graph
 // pass 1; BGPReachabilityEdges that reference them have their SrcID rewritten
 // to the IGP node ID so reachability is preserved.
 //
-// # BGP best-path selection (one edge per prefix)
+// # BGP best-path selection (one edge per prefix per quality tier)
 //
 // The BMP stream delivers prefix advertisements from every BGP speaker that
 // has the prefix in its RIB, including re-advertisers at every tier. Without
@@ -39,17 +39,24 @@ package graph
 // DC40/41, xrd01/02, etc. — creating a dense star rather than a clean origin
 // attachment.
 //
-// The pre-pass selects the single best BGPReachabilityEdge per prefix using
-// a simplified BGP decision process:
+// The pre-pass groups BGPReachabilityEdge candidates per prefix and selects
+// the minimum-quality tier using a simplified BGP decision process:
 //
-//  1. Shortest AS_PATH (fewer hops = closer to origin).
-//  2. Highest LocalPref (tiebreak for iBGP-reflected paths).
-//  3. Lowest MED (final tiebreak).
+//  1. Shortest AS_PATH — primary filter; eliminates re-advertisers at
+//     higher tiers (longer paths) while retaining all edges at the minimum
+//     length. This preserves multi-homed prefixes: a prefix reachable via
+//     two ASBR peers (both with AS_PATH length 1) keeps an edge to each.
+//  2. Highest LocalPref — tiebreak within the minimum length group.
+//  3. Lowest MED — final tiebreak.
+//
+// All edges that survive all tiebreaks are inserted (ties are kept, not
+// broken arbitrarily). This means:
+//   - DC-originated prefix: one edge from the single origin peer.
+//   - Internet prefix via two ASBRs at equal quality: two edges, one per ASBR.
 //
 // OwnershipEdges that connect a prefix to a nexthop stub (pfxown:pfx:…:nh:…)
-// are also suppressed for any prefix that has a BGPReachabilityEdge winner —
-// the stub nexthop model is only needed as a fallback when no eBGP peer is
-// known. After suppression, any nh: vertices left without edges are removed.
+// are suppressed for any prefix that has a BGPReachabilityEdge winner —
+// the stub nexthop model is only needed when no eBGP peer is known.
 //
 // The full RIB is preserved in the source prefix graphs; filtering is applied
 // only to the composed view.
@@ -60,15 +67,17 @@ package graph
 //  2. Build dupVertexID → igpNodeID dedup map.
 //  3. Pre-pass — scan all source edges to:
 //     a. Identify nh: stubs that have at least one edge (nhWithEdges).
-//     b. Select the best BGPReachabilityEdge per prefix (bestReach), applying
-//        SrcID rewrites for deduped peer nodes.
+//     b. Select the best BGPReachabilityEdge group per prefix (bestReach).
 //  4. Pass 1 — copy vertices, skipping duplicates and bare stubs.
+//     Bare-stub filter targets only protocol-less plain-IP nodes (created by
+//     UpsertBGPSession / EnsureNode); IGP nodes are excluded because they
+//     always carry a non-empty Protocol field from the BGP-LS advertisement.
 //  5. Pass 2 — copy edges:
 //     - ETBGPSession: IS-IS or peer-vertex stitching; drop if unresolvable.
 //     - ETBGPReachability: skipped here (handled by pre-pass + pass 3).
 //     - ETOwnership (pfx→nh): suppressed when prefix has a bestReach winner.
 //     - All other types: copy verbatim.
-//  6. Pass 3 — insert one winning BGPReachabilityEdge per prefix.
+//  6. Pass 3 — insert all winning BGPReachabilityEdges per prefix.
 //  7. Pass 4 — remove nh: vertices that ended up with no edges in out.
 //
 // # Staleness
@@ -125,18 +134,14 @@ func Compose(id string, sources ...*Graph) *Graph {
 	}
 
 	// --- pre-pass: nhWithEdges + bestReach ---------------------------------
-	// Combine two scans into one loop for efficiency.
+	// nhWithEdges: nh: stubs with at least one source edge.
 	//
-	// nhWithEdges: nh: stubs that have at least one edge in a source graph.
-	// Stubs with NO source edges are orphans from the startup race and are
-	// dropped in pass 1.
-	//
-	// bestReach: best BGPReachabilityEdge per prefix, selected by the BGP
-	// decision process (shortest AS_PATH → highest LocalPref → lowest MED).
-	// SrcID rewrites for deduped peer nodes are applied here so that the
-	// OwnershipEdge suppression check below can use the same pfxID key.
+	// bestReach: per-prefix group of the best BGPReachabilityEdge candidates.
+	// All candidates at the minimum quality level (AS_PATH length, LocalPref,
+	// MED) are retained so that multi-homed prefixes keep edges to all equally-
+	// preferred egress peers.
 	nhWithEdges := make(map[string]struct{})
-	bestReach := make(map[string]*BGPReachabilityEdge) // pfxID → best candidate
+	bestReach := make(map[string]*reachGroup) // pfxID → group
 	for _, src := range sources {
 		src.mu.RLock()
 		for _, e := range src.edges {
@@ -144,7 +149,7 @@ func Compose(id string, sources ...*Graph) *Graph {
 			if dst := e.GetDstID(); len(dst) > 3 && dst[:3] == "nh:" {
 				nhWithEdges[dst] = struct{}{}
 			}
-			// Accumulate best BGPReachabilityEdge per prefix.
+			// Accumulate BGPReachabilityEdge candidates.
 			typed, ok := e.(*BGPReachabilityEdge)
 			if !ok {
 				continue
@@ -156,9 +161,26 @@ func Compose(id string, sources ...*Graph) *Graph {
 				rewritten.ID = "bgpreach:" + igpID + ":" + typed.DstID
 				candidate = &rewritten
 			}
-			if existing, ok := bestReach[candidate.DstID]; !ok || betterBGPPath(candidate, existing) {
-				bestReach[candidate.DstID] = candidate
+			group, exists := bestReach[candidate.DstID]
+			if !exists {
+				bestReach[candidate.DstID] = &reachGroup{
+					quality: bgpQuality(candidate),
+					edges:   map[string]*BGPReachabilityEdge{candidate.ID: candidate},
+				}
+				continue
 			}
+			cq := bgpQuality(candidate)
+			cmp := cq.compare(group.quality)
+			switch {
+			case cmp < 0:
+				// Strictly better — replace entire group.
+				group.quality = cq
+				group.edges = map[string]*BGPReachabilityEdge{candidate.ID: candidate}
+			case cmp == 0:
+				// Tied — add to group (dedup by edge ID).
+				group.edges[candidate.ID] = candidate
+			}
+			// Worse — discard.
 		}
 		src.mu.RUnlock()
 	}
@@ -170,25 +192,30 @@ func Compose(id string, sources ...*Graph) *Graph {
 			if _, isDup := dupVertexToIGPID[v.GetID()]; isDup {
 				continue
 			}
-			// Drop plain stub nodes — Node vertices with no RouterID and no
-			// Subtype were auto-created by UpsertBGPSession (LocalBGPID stubs
-			// for the local router) or EnsureNode. They add noise without
-			// contributing connectivity in the composed graph.
+			// Drop bare stub nodes — Node vertices with no RouterID, no
+			// Subtype, AND no Protocol. This targets stubs auto-created by
+			// UpsertBGPSession (LocalBGPID plain-IP nodes) or EnsureNode.
 			//
-			// Exception A: nh: nexthop stubs with at least one live source edge
-			// ARE kept — they are the target of the ResolvePrefix ownership
-			// fallback for prefixes with no known eBGP peer.
+			// The Protocol guard is critical: IGP nodes derived from BGP-LS
+			// always carry a non-empty Protocol ("IS-IS_L1", "IS-IS_L2",
+			// "OSPF", etc.) set by translateLSNode. A Level-1-only IS-IS node
+			// that has no BGP router ID will have RouterID="" and Subtype="",
+			// but its Protocol is set — so it is NOT filtered here.
+			//
+			// Exception A: nh: nexthop stubs with at least one live source
+			// edge ARE kept (ResolvePrefix fallback for prefixes with no eBGP
+			// peer). Orphaned nh: stubs (no source edges) are dropped.
 			//
 			// Exception B: NSExternalBGP peer nodes always have a Subtype set,
 			// so they are never matched by this filter.
-			if n, ok := v.(*Node); ok && n.RouterID == "" && string(n.Subtype) == "" {
+			if n, ok := v.(*Node); ok && n.RouterID == "" && string(n.Subtype) == "" && n.Protocol == "" {
 				id := n.ID
 				if len(id) >= 3 && id[:3] == "nh:" {
 					if _, hasEdge := nhWithEdges[id]; !hasEdge {
 						continue // orphaned nh: stub — drop
 					}
 				} else {
-					continue // plain IP stub — always drop
+					continue // plain-IP stub — always drop
 				}
 			}
 			_ = out.AddVertex(v)
@@ -231,7 +258,7 @@ func Compose(id string, sources ...*Graph) *Graph {
 				}
 				// Unresolvable — drop.
 			case *BGPReachabilityEdge:
-				// Best-path winner selected in pre-pass; inserted in pass 3.
+				// Best-path winners selected in pre-pass; inserted in pass 3.
 				// Skip all candidates here to avoid duplicate insertion.
 				_ = typed
 			case *OwnershipEdge:
@@ -256,9 +283,13 @@ func Compose(id string, sources ...*Graph) *Graph {
 		src.mu.RUnlock()
 	}
 
-	// --- pass 3: insert the single best BGPReachabilityEdge per prefix ------
-	for _, e := range bestReach {
-		_ = out.AddEdge(e)
+	// --- pass 3: insert all winning BGPReachabilityEdges per prefix --------
+	// Multiple edges are inserted when two or more peers advertise the same
+	// prefix at equal quality (e.g. two internet egress ASBRs).
+	for _, group := range bestReach {
+		for _, e := range group.edges {
+			_ = out.AddEdge(e)
+		}
 	}
 
 	// --- pass 4: remove nh: vertices that have no edges in the composed graph ---
@@ -283,25 +314,54 @@ func Compose(id string, sources ...*Graph) *Graph {
 	return out
 }
 
-// betterBGPPath returns true if candidate should replace existing as the
-// selected best-path edge for a prefix vertex in the composed graph.
-// Implements a simplified BGP decision process:
-//
-//  1. Shorter AS_PATH — fewer hops means the advertising peer is closer to
-//     the prefix origin. This is the primary differentiator when multiple
-//     routers re-advertise the same prefix across BGP tiers.
-//
-//  2. Higher LocalPref — meaningful for iBGP-reflected paths where the
-//     originating router's policy has already set a preference.
-//
-//  3. Lower MED — final tiebreak.
-func betterBGPPath(candidate, existing *BGPReachabilityEdge) bool {
-	cl, el := len(candidate.ASPath), len(existing.ASPath)
-	if cl != el {
-		return cl < el
+// reachGroup holds all BGPReachabilityEdge candidates for a single prefix that
+// share the same "best" quality. Multiple edges are kept when two peers are
+// equally preferred — this preserves multi-homed prefix visibility.
+type reachGroup struct {
+	quality bgpPathQuality
+	edges   map[string]*BGPReachabilityEdge // edgeID → edge
+}
+
+// bgpPathQuality captures the BGP path attributes used for best-path
+// selection. Lower-valued fields are better for MED; higher-valued for
+// LocalPref; shorter for ASPath length.
+type bgpPathQuality struct {
+	asPathLen uint32
+	localPref uint32
+	med       uint32
+}
+
+func bgpQuality(e *BGPReachabilityEdge) bgpPathQuality {
+	return bgpPathQuality{
+		asPathLen: uint32(len(e.ASPath)),
+		localPref: e.LocalPref,
+		med:       e.MED,
 	}
-	if candidate.LocalPref != existing.LocalPref {
-		return candidate.LocalPref > existing.LocalPref
+}
+
+// compare returns -1 if q is better than other, 0 if equal, +1 if worse.
+// "Better" follows the standard BGP decision process:
+//  1. Shorter AS_PATH
+//  2. Higher LocalPref
+//  3. Lower MED
+func (q bgpPathQuality) compare(other bgpPathQuality) int {
+	if q.asPathLen != other.asPathLen {
+		if q.asPathLen < other.asPathLen {
+			return -1
+		}
+		return 1
 	}
-	return candidate.MED < existing.MED
+	if q.localPref != other.localPref {
+		if q.localPref > other.localPref {
+			return -1
+		}
+		return 1
+	}
+	if q.med != other.med {
+		if q.med < other.med {
+			return -1
+		}
+		return 1
+	}
+	return 0
 }
