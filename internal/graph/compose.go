@@ -199,6 +199,36 @@ func Compose(id string, sources ...*Graph) *Graph {
 		src.mu.RUnlock()
 	}
 
+	// --- nh: stitch pre-check: which prefixes have at least one stitchable nh: OwnershipEdge ---
+	// When a prefix has multiple pfx→nh: OwnershipEdges (e.g. one to nh:10.0.0.9 which
+	// stitches fine, and others to interface IPs like nh:10.2.1.8 which don't match any
+	// RouterID), the stitchable edge is emitted rewritten and the un-stitchable ones must
+	// be suppressed. Without this, pass 2 iterates edges in arbitrary order and emits the
+	// un-stitchable edges as-is, leaving orphaned nh: vertices alongside the stitched node.
+	stitchablePfx := make(map[string]struct{})
+	for _, src := range sources {
+		src.mu.RLock()
+		for _, e := range src.edges {
+			ow, ok := e.(*OwnershipEdge)
+			if !ok || len(ow.SrcID) < 4 || ow.SrcID[:4] != "pfx:" {
+				continue
+			}
+			if len(ow.DstID) <= 3 || ow.DstID[:3] != "nh:" {
+				continue
+			}
+			// Only relevant when this prefix would reach the nh: stitch path in
+			// pass 2 (i.e. no genuine non-dedup BGPReachabilityEdge winner).
+			if group, hasBest := bestReach[ow.SrcID]; hasBest && !group.allDedup {
+				continue
+			}
+			nhIP := ow.DstID[3:]
+			if _, ok := routerIDToNodeID[nhIP]; ok {
+				stitchablePfx[ow.SrcID] = struct{}{}
+			}
+		}
+		src.mu.RUnlock()
+	}
+
 	// --- pass 1: copy all vertices, skipping duplicates and bare stubs -----
 	for _, src := range sources {
 		src.mu.RLock()
@@ -286,6 +316,14 @@ func Compose(id string, sources ...*Graph) *Graph {
 						rewritten.ID = "pfxown:" + typed.SrcID + ":" + igpID
 						stitchedPfxes[typed.SrcID] = struct{}{}
 						_ = out.AddEdge(&rewritten)
+						continue
+					}
+					// Stitch failed for this nh: — suppress if another OwnershipEdge
+					// for the same prefix CAN be stitched to an IGP node. That sibling
+					// edge connects the prefix correctly; keeping this one would leave
+					// an orphaned nh: vertex (e.g. a peering interface IP like
+					// nh:10.2.1.8 alongside the already-stitched loopback node).
+					if _, canStitch := stitchablePfx[typed.SrcID]; canStitch {
 						continue
 					}
 				}
