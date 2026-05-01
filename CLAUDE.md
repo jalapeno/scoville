@@ -15,6 +15,13 @@ not routers and routing protocols.**
 - If no SRv6 SIDs exist for a computed path, syd still returns the path with an
   empty segment list and lets the caller decide what to do. SID availability is
   orthogonal to path reachability.
+- **Data source agnostic**: today syd ingests topology from routing protocol
+  telemetry (BGP-LS via BMP/GoBMP) and from user-supplied JSON (e.g.
+  `clos-fabric.json`). In the future any data stream capable of describing
+  vertices and edges — NetFlow, knowledge graphs, service meshes, physical
+  plant databases, or anything else — could feed the graph store. The path
+  engine and allocation layer are completely decoupled from how the graph was
+  populated.
 
 ## Project overview
 
