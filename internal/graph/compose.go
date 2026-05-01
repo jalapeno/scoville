@@ -18,7 +18,7 @@ package graph
 //
 //  1. NSExternalBGP peer nodes — created when an eBGP session is seen from a
 //     router that is also in the IGP domain. Their RouterID matches an IGP
-//     node's RouterID (e.g. peer:10.0.0.6_10.6.6.2 duplicates xrd06).
+//     node's RouterID (e.g. peer:10.0.0.6 duplicates xrd06).
 //
 //  2. Nexthop stub nodes — created by the unicast prefix handler's fallback
 //     path when no peer spec is available. Their ID IS the nexthop IP address
@@ -31,17 +31,37 @@ package graph
 // pass 1; BGPReachabilityEdges that reference them have their SrcID rewritten
 // to the IGP node ID so reachability is preserved.
 //
+// # BGP best-path selection (one edge per prefix)
+//
+// The BMP stream delivers prefix advertisements from every BGP speaker that
+// has the prefix in its RIB, including all re-advertisers along the path.
+// Without filtering, a prefix originated by DC46 would arrive with edges from
+// DC42/43, DC40/41, xrd01/02, and any other speaker — creating a star of
+// connections rather than a clean origin attachment.
+//
+// Compose retains only the single best BGPReachabilityEdge per prefix vertex,
+// selected by the standard BGP decision process:
+//
+//  1. Shortest AS_PATH (fewer hops = closer to the originating router).
+//  2. Highest LocalPref (tiebreak — meaningful for iBGP reflected paths).
+//  3. Lowest MED (tiebreak).
+//
+// The full RIB is preserved in the source prefix graphs; this filtering is
+// applied only to the composed view.
+//
 // # Algorithm
 //
 //  1. Build a RouterID → nodeID secondary index from all VTNode vertices
 //     across all source graphs (IGP nodes only; NSExternalBGP nodes excluded).
 //  2. Build a dupVertexID → igpNodeID map covering both kinds of duplicates.
 //  3. Pass 1 — copy all vertices, skipping vertices in the dedup map.
-//  4. Pass 2 — copy all edges:
-//     - ETBGPSession: rewrite SrcID from LocalBGPID to IGP node ID; drop if
+//  4. Pass 2 — process all edges:
+//     - ETBGPSession: rewrite SrcID (IS-IS or peer-vertex stitching); drop if
 //       unresolvable.
-//     - ETBGPReachability: rewrite SrcID if the source vertex was a duplicate.
+//     - ETBGPReachability: rewrite SrcID if duplicate; accumulate best-path
+//       candidate per prefix DstID (not inserted yet).
 //     - All other types: copy verbatim; silently skip if vertices missing.
+//  5. Insert one winning BGPReachabilityEdge per prefix.
 //
 // # Staleness
 //
@@ -157,6 +177,10 @@ func Compose(id string, sources ...*Graph) *Graph {
 	}
 
 	// --- pass 2: copy all edges, stitching BGP sessions and dedup peers ---
+	// BGPReachabilityEdges are not added immediately; candidates are collected
+	// per prefix DstID and the best-path winner is inserted in a final step.
+	bestReach := make(map[string]*BGPReachabilityEdge) // pfxID → best candidate
+
 	for _, src := range sources {
 		src.mu.RLock()
 		for _, e := range src.edges {
@@ -200,15 +224,19 @@ func Compose(id string, sources ...*Graph) *Graph {
 				}
 				// Unresolvable — drop.
 			case *BGPReachabilityEdge:
-				// If the source vertex was a duplicate, rewrite SrcID to the
-				// IGP node ID so reachability edges remain connected.
+				// Rewrite SrcID if the source vertex was a duplicate, then
+				// accumulate as a best-path candidate for this prefix.
+				var candidate *BGPReachabilityEdge
 				if igpID, isDup := dupVertexToIGPID[typed.SrcID]; isDup {
 					rewritten := *typed
 					rewritten.SrcID = igpID
 					rewritten.ID = "bgpreach:" + igpID + ":" + typed.DstID
-					_ = out.AddEdge(&rewritten)
+					candidate = &rewritten
 				} else {
-					_ = out.AddEdge(e)
+					candidate = typed
+				}
+				if existing, ok := bestReach[candidate.DstID]; !ok || betterBGPPath(candidate, existing) {
+					bestReach[candidate.DstID] = candidate
 				}
 			default:
 				_ = out.AddEdge(e)
@@ -217,5 +245,33 @@ func Compose(id string, sources ...*Graph) *Graph {
 		src.mu.RUnlock()
 	}
 
+	// --- pass 3: insert the single best BGPReachabilityEdge per prefix ------
+	for _, e := range bestReach {
+		_ = out.AddEdge(e)
+	}
+
 	return out
+}
+
+// betterBGPPath returns true if candidate should replace existing as the
+// selected best-path edge for a prefix vertex in the composed graph.
+// Implements a simplified BGP decision process:
+//
+//  1. Shorter AS_PATH — fewer hops means the advertising peer is closer to
+//     the prefix origin. This is the primary differentiator when multiple
+//     routers re-advertise the same prefix across BGP tiers.
+//
+//  2. Higher LocalPref — meaningful for iBGP-reflected paths where the
+//     originating router's policy has already set a preference.
+//
+//  3. Lower MED — final tiebreak.
+func betterBGPPath(candidate, existing *BGPReachabilityEdge) bool {
+	cl, el := len(candidate.ASPath), len(existing.ASPath)
+	if cl != el {
+		return cl < el
+	}
+	if candidate.LocalPref != existing.LocalPref {
+		return candidate.LocalPref > existing.LocalPref
+	}
+	return candidate.MED < existing.MED
 }
