@@ -52,10 +52,11 @@ func resolveOne(g *graph.Graph, spec apitypes.EndpointSpec) (ResolvedEndpoint, e
 		}
 		switch v.GetType() {
 		case graph.VTNode:
-			// For external BGP peer nodes (no LinkEdges), follow the inbound
-			// BGPSession edge to the IGP node that peers with them.
+			// For external BGP peer nodes (no LinkEdges), walk up the BGPSession
+			// chain to find the IS-IS node that ultimately connects to this peer
+			// (may be multiple hops away in a multi-tier DC fabric).
 			if n, ok := v.(*graph.Node); ok && n.Subtype == graph.NSExternalBGP {
-				igpID, err := resolveReachabilityNode(g, spec.ID)
+				igpID, err := walkToIGPNode(g, spec.ID, make(map[string]struct{}))
 				if err != nil {
 					return ResolvedEndpoint{}, fmt.Errorf("external BGP peer %q: %w", spec.ID, err)
 				}

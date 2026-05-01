@@ -116,40 +116,48 @@ func findPrefixVertex(g *graph.Graph, cidr string) (string, error) {
 
 // resolveReachabilityNode returns the IGP node ID that the given SrcID (from
 // a BGPReachabilityEdge) represents. For IGP nodes the SrcID is used directly.
-// For NSExternalBGP peer vertices, the function follows the inbound BGPSession
-// edge to find the stitched IGP node.
+// For NSExternalBGP peer vertices, the function walks up the inbound BGPSession
+// chain until it finds an IS-IS (non-NSExternalBGP) node. This handles multi-
+// tier DC fabrics where a prefix originates at a leaf (tier-2) several BGP hops
+// away from the IS-IS ASBR: leaf → spine → ASBR (IS-IS node).
 func resolveReachabilityNode(g *graph.Graph, srcID string) (string, error) {
-	v := g.GetVertex(srcID)
+	return walkToIGPNode(g, srcID, make(map[string]struct{}))
+}
+
+func walkToIGPNode(g *graph.Graph, nodeID string, visited map[string]struct{}) (string, error) {
+	if _, seen := visited[nodeID]; seen {
+		return "", fmt.Errorf("cycle at %q", nodeID)
+	}
+	visited[nodeID] = struct{}{}
+
+	v := g.GetVertex(nodeID)
 	if v == nil {
-		return "", fmt.Errorf("vertex %q not found", srcID)
+		return "", fmt.Errorf("vertex %q not found", nodeID)
 	}
 	if v.GetType() != graph.VTNode {
-		return "", fmt.Errorf("vertex %q is not a node", srcID)
+		return "", fmt.Errorf("vertex %q is not a node", nodeID)
 	}
 	n, ok := v.(*graph.Node)
 	if !ok {
-		return "", fmt.Errorf("vertex %q is not a *graph.Node", srcID)
+		return "", fmt.Errorf("vertex %q is not a *graph.Node", nodeID)
 	}
 
-	// IGP node — use directly.
+	// IGP node — we're done.
 	if n.Subtype != graph.NSExternalBGP {
-		return srcID, nil
+		return nodeID, nil
 	}
 
-	// External BGP peer — find the BGPSession edge whose DstID is this peer.
-	// In a composed graph, BGPSessionEdge.SrcID has already been rewritten to
-	// the IGP node ID. DstID is the remote peer vertex ID.
-	for _, e := range g.InEdges(srcID) {
-		if e.GetType() == graph.ETBGPSession {
-			igpNode := g.GetVertex(e.GetSrcID())
-			if igpNode != nil && igpNode.GetType() == graph.VTNode {
-				if igpN, ok := igpNode.(*graph.Node); ok && igpN.Subtype != graph.NSExternalBGP {
-					return e.GetSrcID(), nil
-				}
-			}
+	// External BGP peer — follow every inbound BGPSession edge and recurse.
+	// The first path that reaches an IS-IS node wins.
+	for _, e := range g.InEdges(nodeID) {
+		if e.GetType() != graph.ETBGPSession {
+			continue
+		}
+		if igpID, err := walkToIGPNode(g, e.GetSrcID(), visited); err == nil {
+			return igpID, nil
 		}
 	}
-	return "", fmt.Errorf("no IGP node found for external BGP peer %q", srcID)
+	return "", fmt.Errorf("no IGP node found for external BGP peer %q", nodeID)
 }
 
 // isBetterPath returns true if candidate is a better BGP path than current.
